@@ -21,3 +21,12 @@ func ToSnakeCase(s string) string {
 	}
 	return b.String()
 }
+
+// pascalCase converts a lowercase package name to PascalCase for use in
+// generated function names. Example: "authv1" → "Authv1"
+func pascalCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}

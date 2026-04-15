@@ -199,6 +199,53 @@ type Outer struct {
 	}
 }
 
+func TestRunCrossPackage_SameTypeName(t *testing.T) {
+	// When internal and external types share the same name, function names
+	// should be disambiguated with the external package name.
+	const extMod = "example.com/extpkg6"
+	const localMod = "example.com/localpkg6"
+
+	localDir, _ := createCrossPackageModules(t, localMod, extMod,
+		map[string]string{
+			"models.go": `package localpkg6
+
+type User struct {
+	ID   int
+	Name string
+}
+`,
+		},
+		map[string]string{
+			"models.go": `package extpkg6
+
+type User struct {
+	ID   int
+	Name string
+}
+`,
+		},
+	)
+
+	RunCrossPackage(CrossPackageOptions{
+		WorkDir:      localDir,
+		InternalType: "User",
+		ExternalType: "User",
+		Output:       "user_mapper_gen.go",
+		ExtPkgPath:   extMod,
+		Bidi:         true,
+	})
+
+	content := mustReadFile(t, filepath.Join(localDir, "user_mapper_gen.go"))
+
+	// Function names should include the external package name for disambiguation.
+	if !strings.Contains(content, "MapUserToExtpkg6User") {
+		t.Errorf("output missing MapUserToExtpkg6User (disambiguated name):\n%s", content)
+	}
+	if !strings.Contains(content, "MapExtpkg6UserToUser") {
+		t.Errorf("output missing MapExtpkg6UserToUser (disambiguated reverse name):\n%s", content)
+	}
+}
+
 func TestRunCrossPackage_OptionalUnmatchedField(t *testing.T) {
 	// Internal has an optional extra field → no warning.
 	const extMod = "example.com/extpkg5"

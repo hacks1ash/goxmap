@@ -3,8 +3,11 @@
 package main
 
 // MapEventToEventDTO maps Event to EventDTO.
-func MapEventToEventDTO(src Event) EventDTO {
-	var dst EventDTO
+func MapEventToEventDTO(src *Event) *EventDTO {
+	if src == nil {
+		return nil
+	}
+	dst := &EventDTO{}
 	dst.ID = src.ID
 	dst.Title = src.Title
 	dst.Description = src.Description

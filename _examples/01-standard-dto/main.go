@@ -42,7 +42,7 @@ type UserResponse struct {
 
 func main() {
 	email := "alice@example.com"
-	user := DBUser{
+	user := &DBUser{
 		ID:        42,
 		FirstName: "Alice",
 		LastName:  "Smith",

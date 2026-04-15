@@ -2,6 +2,28 @@ package cli
 
 import "testing"
 
+func TestPascalCase(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"authv1", "Authv1"},
+		{"extpkg", "Extpkg"},
+		{"proto", "Proto"},
+		{"a", "A"},
+		{"", ""},
+		{"Alreadyupper", "Alreadyupper"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := pascalCase(tc.input)
+			if got != tc.want {
+				t.Errorf("pascalCase(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestToSnakeCase(t *testing.T) {
 	tests := []struct {
 		name  string

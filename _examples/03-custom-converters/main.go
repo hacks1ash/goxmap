@@ -61,7 +61,7 @@ func NormalizeTags(tags string) string {
 }
 
 func main() {
-	event := Event{
+	event := &Event{
 		ID:          1,
 		Title:       "Go Meetup",
 		Description: "Monthly Go developer meetup",

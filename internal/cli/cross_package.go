@@ -69,11 +69,20 @@ func RunCrossPackage(opts CrossPackageOptions) {
 	ResolveTypeMismatches(localPctx, crossResult.FromExternal.Pairs, opts.ExternalType)
 
 	// Determine function names.
+	// When internal and external types share the same name, qualify with
+	// the external package name to disambiguate (e.g., MapUserToAuthv1User).
+	extLabel := opts.ExternalType
+	intLabel := opts.InternalType
+	if opts.InternalType == opts.ExternalType {
+		prefix := pascalCase(externalInfo.PackageName)
+		extLabel = prefix + opts.ExternalType
+	}
+
 	toExtFn := opts.FuncName
 	if toExtFn == "" {
-		toExtFn = "Map" + opts.InternalType + "To" + opts.ExternalType
+		toExtFn = "Map" + intLabel + "To" + extLabel
 	}
-	fromExtFn := "Map" + opts.ExternalType + "To" + opts.InternalType
+	fromExtFn := "Map" + extLabel + "To" + intLabel
 
 	ccfg := generator.CrossConfig{
 		PackageName:          internalInfo.PackageName,

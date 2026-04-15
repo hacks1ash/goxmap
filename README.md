@@ -110,8 +110,9 @@ This produces `user_d_t_o_mapper_gen.go` containing:
 
 package models
 
-func MapUserToUserDTO(src User) UserDTO {
-    var dst UserDTO
+func MapUserToUserDTO(src *User) *UserDTO {
+    if src == nil { return nil }
+    dst := &UserDTO{}
     dst.ID = src.ID
     dst.Name = src.Name
     dst.Email = src.Email
@@ -126,44 +127,67 @@ func MapUserToUserDTO(src User) UserDTO {
 
 ### Automatic Pointer Handling
 
-goxmap handles all pointer combinations automatically with nil-safe code:
-
-| Source | Destination | Behavior |
-|---|---|---|
-| `T` | `T` | Direct assignment |
-| `*T` | `*T` | Direct assignment |
-| `*T` | `T` | Nil check with zero-value fallback |
-| `T` | `*T` | Address-of via helper |
+goxmap uses pointer-based function signatures with nil-safe code for all pointer combinations:
 
 ```go
-// *string to string: nil-safe dereference
-dst.Email = func() string {
-    if src.Email != nil { return *src.Email }
-    var zero string; return zero
-}()
+func MapUserToUserDTO(src *User) *UserDTO {
+    if src == nil { return nil }
+    dst := &UserDTO{}
+    // Direct assignment for pointer fields
+    dst.ID = src.ID
+    // Pointer-to-pointer with nil safety
+    dst.Email = func() *string {
+        if src.Email != nil { return src.Email }
+        return nil
+    }()
+    return dst
+}
 ```
+
+Field-level conversions within the struct handle all pointer combinations:
+
+| Source Field | Destination Field | Behavior |
+|---|---|---|
+| `T` | `T` | Direct assignment |
+| `*T` | `*T` | Direct assignment with nil check |
+| `*T` | `T` | Nil-checked dereference with zero-value fallback |
+| `T` | `*T` | Address-of helper |
 
 ### Recursive Nested Mapping
 
 When a field is a named struct, goxmap generates a sub-mapper and calls it:
 
 ```go
-// User has Address, UserDTO has AddressDTO
-dst.Address = MapAddressToAddressDTO(src.Address)
+// User has *Address, UserDTO has *AddressDTO
+func MapUserToUserDTO(src *User) *UserDTO {
+    // ...
+    dst.Address = func() *AddressDTO {
+        if src.Address != nil {
+            return MapAddressToAddressDTO(src.Address)
+        }
+        return nil
+    }()
+    // ...
+}
 ```
 
 If `MapAddressToAddressDTO` already exists in your package (hand-written), goxmap detects it and reuses it instead of generating a new one.
 
 ### Slice Support
 
-Slices of structs are mapped with a nil-checked loop:
+Slices of structs are mapped with a nil-checked loop within pointer-safe functions:
 
 ```go
-if src.Emails != nil {
-    dst.Emails = make([]EmailInfoDTO, len(src.Emails))
-    for i, v := range src.Emails {
-        dst.Emails[i] = MapEmailInfoToEmailInfoDTO(v)
+func MapUserToUserDTO(src *User) *UserDTO {
+    if src == nil { return nil }
+    dst := &UserDTO{}
+    if src.Emails != nil {
+        dst.Emails = make([]*EmailInfoDTO, len(src.Emails))
+        for i, v := range src.Emails {
+            dst.Emails[i] = MapEmailInfoToEmailInfoDTO(v)
+        }
     }
+    return dst
 }
 ```
 
@@ -197,12 +221,16 @@ This prevents silent truncation bugs. If you intentionally want the narrowing ca
 | `int` → `uint` | Cross-sign | Error (add converter) |
 | `int` → `int32` | Narrowing | Error (platform-dependent) |
 
-For pointer-to-value combinations, nil safety is maintained:
+For pointer-to-pointer combinations with type coercion, nil safety is maintained:
 
 ```go
-dst.BigID = func() int64 {
-    if src.SmallID != nil { return int64(*src.SmallID) }
-    var zero int64; return zero
+// *int32 to *int64: pointer-based with type conversion
+dst.BigID = func() *int64 {
+    if src.SmallID != nil {
+        v := int64(*src.SmallID)
+        return &v
+    }
+    return nil
 }()
 ```
 

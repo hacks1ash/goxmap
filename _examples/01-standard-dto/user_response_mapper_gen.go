@@ -3,8 +3,11 @@
 package main
 
 // MapDBUserToUserResponse maps DBUser to UserResponse.
-func MapDBUserToUserResponse(src DBUser) UserResponse {
-	var dst UserResponse
+func MapDBUserToUserResponse(src *DBUser) *UserResponse {
+	if src == nil {
+		return nil
+	}
+	dst := &UserResponse{}
 	dst.ID = src.ID
 	dst.FirstName = src.FirstName
 	dst.LastName = src.LastName

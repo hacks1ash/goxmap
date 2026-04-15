@@ -27,7 +27,7 @@ go test -v ./...
 ## Project Structure
 
 ```
-cmd/mapper-gen/          CLI entry point
+main.go                  CLI entry point (root)
 internal/
   loader/                Type loading via golang.org/x/tools/go/packages
   matcher/               Field matching algorithms
@@ -181,7 +181,7 @@ Add testdata structs to `internal/loader/testdata/models.go`.
 
 - Add the new tag to the "Tag Reference" table in `README.md`
 - Add the new tag to the "Directive Reference" table in `docs/TECHNICAL_DESIGN.md`
-- If the resolver requires a new CLI flag, add it to `cmd/mapper-gen/main.go` and the CLI Reference section
+- If the resolver requires a new CLI flag, add it to root `main.go` and the CLI Reference section
 
 ### Design Principles for Resolvers
 

@@ -28,9 +28,22 @@ type StructField struct {
 	SliceElemTypeName string // Named struct name of slice element, empty if primitive
 	IsSliceElemStruct bool   // Whether the slice element is a named struct
 
+	// Named non-struct type support (enum patterns).
+	// IsNamedNonStruct is true when the field is a named type that is NOT a struct
+	// (e.g., type Status string, type Role int).
+	IsNamedNonStruct bool
+	// UnderlyingTypeName is the underlying type name for named non-struct types
+	// (e.g., "string" for type Status string). Empty for structs, primitives, slices.
+	UnderlyingTypeName string
+
 	// Cross-package binding support.
 	BindName string // Value from `mapper:"bind:Xxx"` tag - direct field name binding
 	BindJSON string // Value from `mapper:"bind_json:xxx"` tag - external json key binding
+
+	// Ignore is true when mapper:"ignore" is set — field is excluded from matching.
+	Ignore bool
+	// Optional is true when mapper:"optional" is set — suppress warning if unmatched.
+	Optional bool
 }
 
 // StructInfo holds metadata about a loaded struct.
@@ -161,9 +174,7 @@ func LoadStructFromPkg(pctx *PackageContext, typeName string) (*StructInfo, erro
 
 		tag := underlying.Tag(i)
 		sf.JSONName = parseJSONTag(tag)
-		sf.MapperFn = parseMapperFuncTag(tag)
-		sf.BindName = parseMapperBindTag(tag)
-		sf.BindJSON = parseMapperBindJSONTag(tag)
+		sf.MapperFn, sf.BindName, sf.BindJSON, sf.Ignore, sf.Optional = parseMapperTagParts(tag)
 
 		analyzeFieldType(field.Type(), &sf, q)
 
@@ -351,6 +362,10 @@ func analyzeFieldType(t types.Type, sf *StructField, q types.Qualifier) {
 		if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 			sf.IsNamedStruct = true
 			sf.StructName = named.Obj().Name()
+		} else {
+			// Named non-struct type (enum pattern: type Status string).
+			sf.IsNamedNonStruct = true
+			sf.UnderlyingTypeName = types.TypeString(named.Underlying(), q)
 		}
 	}
 
@@ -400,49 +415,29 @@ func parseJSONTag(rawTag string) string {
 	return name
 }
 
-func parseMapperFuncTag(rawTag string) string {
+// parseMapperTagParts extracts all mapper tag values from a raw struct tag.
+func parseMapperTagParts(rawTag string) (funcName, bindName, bindJSON string, ignore, optional bool) {
 	tag := reflect.StructTag(rawTag)
 	mapperVal, ok := tag.Lookup("mapper")
 	if !ok {
-		return ""
+		return
 	}
 	for _, part := range strings.Split(mapperVal, ";") {
 		part = strings.TrimSpace(part)
-		if after, found := strings.CutPrefix(part, "func:"); found {
-			return after
+		switch {
+		case part == "ignore":
+			ignore = true
+		case part == "optional":
+			optional = true
+		case strings.HasPrefix(part, "func:"):
+			funcName = strings.TrimPrefix(part, "func:")
+		case strings.HasPrefix(part, "bind:"):
+			bindName = strings.TrimPrefix(part, "bind:")
+		case strings.HasPrefix(part, "bind_json:"):
+			bindJSON = strings.TrimPrefix(part, "bind_json:")
 		}
 	}
-	return ""
-}
-
-func parseMapperBindTag(rawTag string) string {
-	tag := reflect.StructTag(rawTag)
-	mapperVal, ok := tag.Lookup("mapper")
-	if !ok {
-		return ""
-	}
-	for _, part := range strings.Split(mapperVal, ";") {
-		part = strings.TrimSpace(part)
-		if after, found := strings.CutPrefix(part, "bind:"); found {
-			return after
-		}
-	}
-	return ""
-}
-
-func parseMapperBindJSONTag(rawTag string) string {
-	tag := reflect.StructTag(rawTag)
-	mapperVal, ok := tag.Lookup("mapper")
-	if !ok {
-		return ""
-	}
-	for _, part := range strings.Split(mapperVal, ";") {
-		part = strings.TrimSpace(part)
-		if after, found := strings.CutPrefix(part, "bind_json:"); found {
-			return after
-		}
-	}
-	return ""
+	return
 }
 
 func parseStructLevelMapper(s *types.Struct, pkg *types.Package) string {

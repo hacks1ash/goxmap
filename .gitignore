@@ -10,6 +10,7 @@ Thumbs.db
 
 # Go
 /vendor/
+/bin/
 
 # Benchmark output
 benchmarks/results.txt
@@ -17,6 +18,8 @@ benchmarks/results.txt
 # Claude Code
 .claude/
 
-launch
+/launch
+/goxmap
+/plans/
 
 TODO.md

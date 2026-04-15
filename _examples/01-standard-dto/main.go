@@ -14,7 +14,7 @@ import (
 	"os"
 )
 
-//go:generate go run github.com/hacks1ash/goxmap/cmd/mapper-gen -src DBUser -dst UserResponse
+//go:generate go run github.com/hacks1ash/goxmap -src DBUser -dst UserResponse
 
 // DBUser represents a row from the users table.
 // Nullable columns are modeled as pointers.

@@ -1,6 +1,6 @@
 # Technical Design
 
-This document describes the internal architecture of `mapper-gen`, a compile-time code generator that produces type-safe struct mapping functions for Go. It is intended for contributors and advanced users who want to understand the design decisions, data flow, and extension points of the tool.
+This document describes the internal architecture of `goxmap`, a compile-time code generator that produces type-safe struct mapping functions for Go. It is intended for contributors and advanced users who want to understand the design decisions, data flow, and extension points of the tool.
 
 ## Table of Contents
 
@@ -26,6 +26,7 @@ This document describes the internal architecture of `mapper-gen`, a compile-tim
   - [Multi-Function Rendering](#multi-function-rendering)
   - [Cross-Package Rendering and Import Management](#cross-package-rendering-and-import-management)
   - [Getter-Based Access for Protobuf Compatibility](#getter-based-access-for-protobuf-compatibility)
+  - [CLI Helper Functions](#cli-helper-functions)
 - [Stage 2.5: Type Mismatch Resolution](#stage-25-type-mismatch-resolution)
   - [Numeric Coercion](#numeric-coercion)
   - [Converter Function Auto-Discovery](#converter-function-auto-discovery)
@@ -44,7 +45,7 @@ This document describes the internal architecture of `mapper-gen`, a compile-tim
 
 ## Architecture Overview
 
-`mapper-gen` follows a four-stage pipeline that transforms Go type metadata into formatted source code:
+`goxmap` follows a four-stage pipeline that transforms Go type metadata into formatted source code:
 
 ```
                      +-----------+
@@ -244,27 +245,65 @@ This single-pass approach ensures consistency: every field that is mapped in one
 
 After field matching produces `FieldPair` values, a classification step inspects each pair for type mismatches. This happens in `classifyPair()` (called during `Match()`) and `resolveTypeMismatches()` (called by the CLI after matching).
 
-### Numeric Coercion
+### Ignored and Optional Fields
 
-When both the source and destination element types (after pointer peeling) are Go numeric types, the pair is classified as `NumericCast`. The generator emits a simple Go type conversion:
+Before field matching, destination fields tagged with `mapper:"ignore"` are excluded entirely from the matching process. These fields produce no assignment and no warning, providing a mechanism to exclude fields from auto-mapping.
+
+Destination fields tagged with `mapper:"optional"` participate in matching normally, but if unmatched, they are flagged in the `Unmatched` list without generating a CLI warning. The field receives the Go zero value by default.
+
+This distinction allows developers to:
+- Use `mapper:"ignore"` for internal/private fields that should never be set by the mapper
+- Use `mapper:"optional"` for newly added fields where the zero value is acceptable
+
+### Named Type Conversion (Enum Support)
+
+When source and destination fields are different **named types** with the **same underlying type**, the pair is classified as `TypeCast`:
 
 ```go
-dst.Age = int32(src.Age)
+type StatusA string
+type StatusB string
+
+// Generated: dst.Status = StatusB(src.Status)
+```
+
+The same-underlying-type detection uses the `go/types` API to compare underlying types precisely. This covers Go enum patterns (string-based enums, iota int-based enums, etc.) without requiring explicit `mapper:"func:..."` tags. Pointer combinations are handled with nil-safety closures, identical to numeric casts.
+
+### Numeric Coercion
+
+When both the source and destination element types (after pointer peeling) are Go numeric types, the pair undergoes narrowing detection:
+
+**Non-narrowing casts** (safe conversions) are classified as `NumericCast` and the generator emits a simple Go type conversion:
+
+```go
+dst.Age = int32(src.Age)  // int to int32: safe (widening)
+```
+
+**Narrowing casts** (conversions that may lose data) are treated as `TypeMismatch` and require an explicit converter function:
+
+```go
+// int64 to int32: narrowing (smaller destination)
+// int to float: cross-family (potential precision loss)
+// uint to int: cross-sign (different interpretation)
 ```
 
 The numeric type set includes `int`, `int8`, `int16`, `int32`, `int64`, `uint`, `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, `byte`, and `rune`.
 
-For pointer combinations, the cast is wrapped in a nil-safe closure:
+Narrowing detection operates on two rules:
+
+1. **Cross-family conversions** (signed ↔ unsigned, int ↔ float) are always narrowing and require an explicit converter.
+2. **Same-family conversions** are narrowing when the destination has fewer bits than the source (e.g., `int64` → `int32`).
+
+For pointer combinations of non-narrowing casts, the cast is wrapped in a nil-safe closure:
 
 ```go
-// *int -> int32
+// *int -> int32: safe widening
 dst.Age = func() int32 {
     if src.Age != nil { return int32(*src.Age) }
     var zero int32; return zero
 }()
 ```
 
-Numeric casts compile to single machine instructions with zero heap allocations (8.9 ns/op in benchmarks). This is 319x faster than reflection-based alternatives, which must perform runtime type checks and `reflect.Value` boxing for each conversion.
+Non-narrowing numeric casts compile to single machine instructions with zero heap allocations (8.9 ns/op in benchmarks). This is 319x faster than reflection-based alternatives, which must perform runtime type checks and `reflect.Value` boxing for each conversion.
 
 ### Converter Function Auto-Discovery
 
@@ -280,16 +319,25 @@ This auto-discovery eliminates the need for `mapper:"func:..."` tags in the comm
 
 ### Resolution Priority
 
-When a matched field pair has different types, the following priority chain is evaluated:
+When a matched field pair has different types, the following priority chain is evaluated during classification:
+
+| Priority | Condition | Behavior |
+|---|---|---|
+| 1 | `mapper:"func:Fn"` tag present | Use `Fn` as the converter (skip further classification) |
+| 2 | Both types are numeric and non-narrowing | Emit inline type cast (fast path) |
+| 3 | Both types are named non-struct with same underlying | Emit named type cast (enum support) |
+| 4 | Both types are numeric and narrowing | Mark as `TypeMismatch` (requires explicit converter) |
+| 5 | Types differ but neither is numeric or same-underlying | Mark as `TypeMismatch` (requires explicit converter) |
+
+After classification, unresolved `TypeMismatch` pairs enter the resolution phase:
 
 | Priority | Condition | Behavior |
 |---|---|---|
 | 1 | `mapper:"func:Fn"` tag present | Use `Fn` as the converter |
-| 2 | Both types are numeric | Emit inline type cast |
-| 3 | `Map<Src>To<Dst>` function exists in package | Use discovered converter |
-| 4 | None of the above | Fatal error with suggestion |
+| 2 | `Map<Src>To<Dst>` function exists in package | Use discovered converter |
+| 3 | None of the above | Fatal error with suggestion |
 
-The fatal error includes the expected function name and a copy-paste-ready function signature, which minimizes the developer's feedback loop.
+The fatal error message includes the expected function name, a copy-paste-ready function signature, and (for narrowing conversions) a note that the conversion may lose data. This minimizes the developer's feedback loop and encourages explicit handling of risky conversions.
 
 ---
 
@@ -376,7 +424,7 @@ The generator transforms the planned function entries into formatted Go source c
 The single-function `Generate` path uses `text/template` for simple mapper functions:
 
 ```go
-const fieldLevelTmpl = `// Code generated by mapper-gen; DO NOT EDIT.
+const fieldLevelTmpl = `// Code generated by goxmap; DO NOT EDIT.
 
 package {{ .PackageName }}
 
@@ -402,7 +450,7 @@ All generated output passes through `go/format.Source` before being written to d
 ```go
 func (g *multiGenerator) render() ([]byte, error) {
     var buf bytes.Buffer
-    buf.WriteString("// Code generated by mapper-gen; DO NOT EDIT.\n\n")
+    buf.WriteString("// Code generated by goxmap; DO NOT EDIT.\n\n")
     buf.WriteString("package " + g.pkgName + "\n\n")
 
     for i, entry := range g.funcs {
@@ -419,9 +467,10 @@ The `renderFieldLevel` method handles field pairs in priority order:
 1. **Custom mapper** (`pair.HasCustomMapper()`): Emits `dst.Field = CustomFunc(src.Field)`.
 2. **Converter function** (`pair.ConverterFunc != ""`): Emits a converter call with pointer nil-safety. Covers both explicit `mapper:"func:..."` tags and auto-discovered `Map<Src>To<Dst>` functions.
 3. **Numeric cast** (`pair.NumericCast`): Emits `DstType(src.Field)` with pointer nil-safety. Handles all four pointer combinations: `T->T`, `*T->T`, `T->*T`, `*T->*T`.
-4. **Slice of named structs** (`pair.NeedsSliceMapper()`): Emits a multi-line block with nil check, `make`, and a `for` loop.
-5. **Nested named struct** (`pair.NeedsNestedMapper()`): Emits a call to the sub-mapper, potentially wrapped in a nil-check closure for pointer combinations.
-6. **Primitive types**: Emits direct assignment, deref, or addr-of expressions depending on pointer conversion.
+4. **Named type cast** (`pair.TypeCast`): Emits `CastType(src.Field)` with pointer nil-safety for enum support. Uses same nil-check pattern as numeric cast.
+5. **Slice of named structs** (`pair.NeedsSliceMapper()`): Emits a multi-line block with nil check, `make`, and a `for` loop.
+6. **Nested named struct** (`pair.NeedsNestedMapper()`): Emits a call to the sub-mapper, potentially wrapped in a nil-check closure for pointer combinations.
+7. **Primitive types**: Emits direct assignment, deref, or addr-of expressions depending on pointer conversion.
 
 ### Cross-Package Rendering and Import Management
 
@@ -471,6 +520,19 @@ When mapping *from* such a struct, direct field access (`src.FullName`) works bu
 The tool detects these getters via `DiscoverGetters`, which scans the method set of the pointer type for methods matching the `Get<FieldName>` pattern with no parameters and a single return value. When a getter is found, the `FromExternal` pair is annotated, and the generator emits `src.GetFullName()` instead of `src.FullName`.
 
 This design does not require the external struct to *be* a Protobuf type. Any struct with getter methods following this convention will benefit from the same treatment. The detection is purely structural.
+
+### CLI Helper Functions
+
+The `internal/cli/` package provides reusable helper functions called by the main command entry point. These helpers encapsulate logic for cross-cutting concerns:
+
+| Function | Purpose |
+|---|---|
+| `ResolveTypeMismatches()` | Resolves unresolved type mismatches by searching for converter functions in package scope |
+| `RunSamePackage()` | Orchestrates same-package mapping generation (matching, type resolution, multi-function code generation) |
+| `RunCrossPackage()` | Orchestrates cross-package mapping generation (getter discovery, cross matching, bidirectional code generation) |
+| `ToSnakeCase()` | Converts CamelCase type names to snake_case for output file naming (e.g., `UserDTO` → `user_dto_mapper_gen.go`) |
+
+This separation allows the main command to focus on flag parsing and I/O, while delegating the core generation workflow to reusable, testable CLI helpers.
 
 ---
 
@@ -593,6 +655,8 @@ Each directive is a `key:value` pair. The parser splits the tag value on `;`, tr
 
 | Directive | Scope | Example | Semantics |
 |---|---|---|---|
+| `ignore` | Field | `mapper:"ignore"` | Exclude field from mapping entirely (no assignment, no warning). |
+| `optional` | Field | `mapper:"optional"` | Suppress warning if no source match; field receives Go zero value. |
 | `func:FnName` | Field | `mapper:"func:FormatTime"` | Use `FnName(src.Field)` instead of direct assignment. |
 | `bind:ExtField` | Field | `mapper:"bind:UserId"` | Match this field to the external field named `ExtField` (Priority 1). |
 | `bind_json:key` | Field | `mapper:"bind_json:user_id"` | Match this field to the external field whose `json` tag equals `key` (Priority 2). |
@@ -610,10 +674,10 @@ This binds the field to `FullName` on the external struct and applies `TrimName`
 
 ## CLI and `go generate` Integration
 
-The `cmd/mapper-gen` binary is the user-facing entry point. It is designed to be invoked via `go generate`:
+The root `main.go` is the user-facing entry point. It is designed to be invoked via `go generate`:
 
 ```go
-//go:generate go run github.com/hacks1ash/goxmap/cmd/mapper-gen -src User -dst UserDTO
+//go:generate go run github.com/hacks1ash/goxmap -src User -dst UserDTO
 ```
 
 Because the tool is invoked via `go run`, it does not require a pre-built binary. The Go toolchain compiles and caches the binary automatically.

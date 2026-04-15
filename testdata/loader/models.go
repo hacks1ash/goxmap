@@ -260,3 +260,71 @@ type BidiDest struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 }
+
+// --- Ignore/optional tag types for testing ---
+
+// IgnoreOptSource for testing ignore/optional tags.
+type IgnoreOptSource struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// IgnoreOptDest has ignore and optional fields.
+type IgnoreOptDest struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Internal string `mapper:"ignore"`
+	Extra    string `mapper:"optional"`
+}
+
+// --- Enum/named type mapping test types ---
+
+// StatusA is a string enum type.
+type StatusA string
+
+// StatusB is a different string enum type with same underlying.
+type StatusB string
+
+// RoleA is an int enum type.
+type RoleA int
+
+// RoleB is a different int enum type with same underlying.
+type RoleB int
+
+// EnumSource has named-type fields.
+type EnumSource struct {
+	Status StatusA `json:"status"`
+	Role   RoleA   `json:"role"`
+}
+
+// EnumDest has different named types with same underlying.
+type EnumDest struct {
+	Status StatusB `json:"status"`
+	Role   RoleB   `json:"role"`
+}
+
+// --- Slice with pointer-to-struct elements for coverage ---
+
+// SlicePtrElemSource has a slice of pointer-to-struct elements.
+type SlicePtrElemSource struct {
+	Items []*EmailInfo `json:"items"`
+}
+
+// --- JSON tag edge case ---
+
+// JSONDashSource has a field with json:"-" tag (should be ignored by json).
+type JSONDashSource struct {
+	ID       int    `json:"id"`
+	Internal string `json:"-"`
+}
+
+// --- Bad converter function signatures for negative testing ---
+
+// NotAFunc_MapBadToString is intentionally a variable, not a function.
+var NotAFunc_MapBadToString = "not a func"
+
+// MapTwoParamToString has wrong signature (2 params instead of 1).
+func MapTwoParamToString(a, b string) string { return a }
+
+// MapTwoReturnToString has wrong signature (2 returns instead of 1).
+func MapTwoReturnToString(a string) (string, error) { return a, nil }

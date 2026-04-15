@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -12,7 +13,8 @@ func testdataDir(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot determine test file path")
 	}
-	return filepath.Join(filepath.Dir(filename), "testdata")
+	// Navigate from internal/loader/ to project root testdata/loader/.
+	return filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "loader")
 }
 
 func TestLoadStruct_Source(t *testing.T) {
@@ -391,10 +393,47 @@ func TestFindConverterFunc(t *testing.T) {
 	})
 }
 
+func TestLoadStruct_IgnoreOptionalTags(t *testing.T) {
+	dir := testdataDir(t)
+	info, err := LoadStruct(dir, "IgnoreOptDest")
+	if err != nil {
+		t.Fatalf("LoadStruct: %v", err)
+	}
+
+	byName := make(map[string]StructField)
+	for _, f := range info.Fields {
+		byName[f.Name] = f
+	}
+
+	// ID and Name should have both Ignore and Optional as false.
+	if f := byName["ID"]; f.Ignore || f.Optional {
+		t.Errorf("ID: Ignore=%v Optional=%v, want both false", f.Ignore, f.Optional)
+	}
+	if f := byName["Name"]; f.Ignore || f.Optional {
+		t.Errorf("Name: Ignore=%v Optional=%v, want both false", f.Ignore, f.Optional)
+	}
+
+	// Internal should have Ignore=true.
+	if f := byName["Internal"]; !f.Ignore {
+		t.Errorf("Internal: Ignore=%v, want true", f.Ignore)
+	}
+	if f := byName["Internal"]; f.Optional {
+		t.Errorf("Internal: Optional=%v, want false", f.Optional)
+	}
+
+	// Extra should have Optional=true.
+	if f := byName["Extra"]; f.Ignore {
+		t.Errorf("Extra: Ignore=%v, want false", f.Ignore)
+	}
+	if f := byName["Extra"]; !f.Optional {
+		t.Errorf("Extra: Optional=%v, want true", f.Optional)
+	}
+}
+
 func TestLoadExternalPackage(t *testing.T) {
 	dir := testdataDir(t)
 	// Load the testdata package itself as an "external" package by import path.
-	pctx, err := LoadExternalPackage(dir, "github.com/hacks1ash/goxmap/internal/loader/testdata")
+	pctx, err := LoadExternalPackage(dir, "github.com/hacks1ash/goxmap/testdata/loader")
 	if err != nil {
 		t.Fatalf("LoadExternalPackage: %v", err)
 	}
@@ -409,5 +448,270 @@ func TestLoadExternalPackage(t *testing.T) {
 	}
 	if info.PackageName != "testdata" {
 		t.Errorf("got package %q, want %q", info.PackageName, "testdata")
+	}
+}
+
+func TestLoadStruct_EnumNamedTypes(t *testing.T) {
+	dir := testdataDir(t)
+	info, err := LoadStruct(dir, "EnumSource")
+	if err != nil {
+		t.Fatalf("LoadStruct: %v", err)
+	}
+
+	byName := make(map[string]StructField)
+	for _, f := range info.Fields {
+		byName[f.Name] = f
+	}
+
+	// Status: StatusA (underlying string) should be a named non-struct.
+	status := byName["Status"]
+	if !status.IsNamedNonStruct {
+		t.Error("Status field: expected IsNamedNonStruct=true")
+	}
+	if status.UnderlyingTypeName != "string" {
+		t.Errorf("Status field: got UnderlyingTypeName=%q, want %q", status.UnderlyingTypeName, "string")
+	}
+	if status.IsNamedStruct {
+		t.Error("Status field: expected IsNamedStruct=false")
+	}
+
+	// Role: RoleA (underlying int) should be a named non-struct.
+	role := byName["Role"]
+	if !role.IsNamedNonStruct {
+		t.Error("Role field: expected IsNamedNonStruct=true")
+	}
+	if role.UnderlyingTypeName != "int" {
+		t.Errorf("Role field: got UnderlyingTypeName=%q, want %q", role.UnderlyingTypeName, "int")
+	}
+	if role.IsNamedStruct {
+		t.Error("Role field: expected IsNamedStruct=false")
+	}
+}
+
+// --- Error path tests for LoadPackage ---
+
+func TestLoadPackage_InvalidDir(t *testing.T) {
+	_, err := LoadPackage("/nonexistent/path/that/does/not/exist")
+	if err == nil {
+		t.Fatal("expected error for invalid directory")
+	}
+}
+
+func TestLoadPackage_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	_, err := LoadPackage(dir)
+	if err == nil {
+		t.Fatal("expected error for directory with no Go files")
+	}
+}
+
+func TestLoadPackage_InvalidGoCode(t *testing.T) {
+	dir := t.TempDir()
+	// A go.mod is required so packages.Load places files in a real module and populates pkg.Errors.
+	gomod := "module example.com/broken\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
+		t.Fatalf("WriteFile go.mod: %v", err)
+	}
+	// Type error: cannot assign string to int — triggers pkg.Errors path in LoadPackage.
+	code := "package broken\n\nfunc Broken() {\n\tvar x int = \"not an int\"\n\t_ = x\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "broken.go"), []byte(code), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := LoadPackage(dir)
+	if err == nil {
+		t.Fatal("expected error for package with type errors")
+	}
+}
+
+func TestLoadExternalPackage_PackageErrors(t *testing.T) {
+	dir := t.TempDir()
+	// A go.mod is required so packages.Load places files in a real module and populates pkg.Errors.
+	gomod := "module example.com/extbroken\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
+		t.Fatalf("WriteFile go.mod: %v", err)
+	}
+	// Type error triggers pkg.Errors in LoadExternalPackage.
+	code := "package extbroken\n\nfunc Broken() {\n\tvar x int = \"not an int\"\n\t_ = x\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "broken.go"), []byte(code), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := LoadExternalPackage(dir, ".")
+	if err == nil {
+		t.Fatal("expected error for external package with type errors")
+	}
+}
+
+func TestLoadExternalPackage_InvalidImport(t *testing.T) {
+	dir := testdataDir(t)
+	_, err := LoadExternalPackage(dir, "github.com/fake/nonexistent/package/xyz123")
+	if err == nil {
+		t.Fatal("expected error for nonexistent external package")
+	}
+}
+
+// --- Error path tests for LoadStructFromPkg ---
+
+func TestLoadStructFromPkg_NonExistentType(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, err := LoadPackage(dir)
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+	_, err = LoadStructFromPkg(pctx, "CompletelyNonExistentType")
+	if err == nil {
+		t.Fatal("expected error for non-existent type")
+	}
+}
+
+func TestLoadStructFromPkg_NonStructType(t *testing.T) {
+	// StatusA is `type StatusA string` — named but not a struct.
+	dir := testdataDir(t)
+	pctx, err := LoadPackage(dir)
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+	_, err = LoadStructFromPkg(pctx, "StatusA")
+	if err == nil {
+		t.Fatal("expected error for non-struct named type")
+	}
+}
+
+// --- LoadStruct convenience error path ---
+
+func TestLoadStruct_InvalidDir(t *testing.T) {
+	_, err := LoadStruct("/nonexistent", "Anything")
+	if err == nil {
+		t.Fatal("expected error for invalid directory")
+	}
+}
+
+// --- analyzeFieldType: slice with ptr-to-struct elements ---
+
+func TestLoadStruct_SlicePtrToStructElem(t *testing.T) {
+	dir := testdataDir(t)
+	info, err := LoadStruct(dir, "SlicePtrElemSource")
+	if err != nil {
+		t.Fatalf("LoadStruct: %v", err)
+	}
+	if len(info.Fields) != 1 {
+		t.Fatalf("expected 1 field, got %d", len(info.Fields))
+	}
+	f := info.Fields[0]
+	if !f.IsSlice {
+		t.Error("expected IsSlice=true")
+	}
+	if !f.SliceElemIsPtr {
+		t.Error("expected SliceElemIsPtr=true")
+	}
+	if !f.IsSliceElemStruct {
+		t.Error("expected IsSliceElemStruct=true")
+	}
+	if f.SliceElemTypeName != "EmailInfo" {
+		t.Errorf("SliceElemTypeName: got %q, want %q", f.SliceElemTypeName, "EmailInfo")
+	}
+}
+
+// --- BaseTypeName additional edge cases ---
+
+func TestBaseTypeName_SliceAndEmpty(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"[]string", "Strings"},
+		{"[]byte", "Bytes"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := BaseTypeName(tt.input)
+			if got != tt.want {
+				t.Errorf("BaseTypeName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- capitalize edge case ---
+
+func TestCapitalize_EmptyString(t *testing.T) {
+	got := capitalize("")
+	if got != "" {
+		t.Errorf("capitalize(\"\") = %q, want \"\"", got)
+	}
+}
+
+// --- parseJSONTag: json:"-" case ---
+
+func TestLoadStruct_JSONDashTag(t *testing.T) {
+	dir := testdataDir(t)
+	info, err := LoadStruct(dir, "JSONDashSource")
+	if err != nil {
+		t.Fatalf("LoadStruct: %v", err)
+	}
+
+	byName := make(map[string]StructField)
+	for _, f := range info.Fields {
+		byName[f.Name] = f
+	}
+
+	// Internal has json:"-" so JSONName should be empty.
+	if f := byName["Internal"]; f.JSONName != "" {
+		t.Errorf("Internal field: expected empty JSONName for json:\"-\", got %q", f.JSONName)
+	}
+}
+
+// --- FindConverterFunc negative cases ---
+
+func TestFindConverterFunc_NotAFunc(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, _ := LoadPackage(dir)
+	// NotAFunc_MapBadToString is a var, ConverterFuncName for "Bad"->"String" = "MapBadToString"
+	// which doesn't exist — expect empty result.
+	result := FindConverterFunc(pctx, "Bad", "String")
+	if result != "" {
+		t.Errorf("expected empty for non-existent converter, got %q", result)
+	}
+}
+
+func TestFindConverterFunc_WrongParamCount(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, _ := LoadPackage(dir)
+	// MapTwoParamToString has 2 params — should be rejected.
+	result := FindConverterFunc(pctx, "TwoParam", "String")
+	if result != "" {
+		t.Errorf("expected empty for wrong param count, got %q", result)
+	}
+}
+
+func TestFindConverterFunc_WrongReturnCount(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, _ := LoadPackage(dir)
+	// MapTwoReturnToString has 2 returns — should be rejected.
+	result := FindConverterFunc(pctx, "TwoReturn", "String")
+	if result != "" {
+		t.Errorf("expected empty for wrong return count, got %q", result)
+	}
+}
+
+// --- DiscoverGetters: additional edge cases ---
+
+func TestDiscoverGetters_TypeWithNoGetters_Source(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, _ := LoadPackage(dir)
+	// Source struct has no Get* methods.
+	getters := DiscoverGetters(pctx, "Source")
+	if len(getters) != 0 {
+		t.Errorf("expected 0 getters for Source, got %d", len(getters))
+	}
+}
+
+func TestDiscoverGetters_NamedNonStructType(t *testing.T) {
+	dir := testdataDir(t)
+	pctx, _ := LoadPackage(dir)
+	// StatusA is `type StatusA string` — not a named struct, so !ok branch.
+	getters := DiscoverGetters(pctx, "StatusA")
+	if len(getters) != 0 {
+		t.Errorf("expected 0 getters for string alias, got %d", len(getters))
 	}
 }

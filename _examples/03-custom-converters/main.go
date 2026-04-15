@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:generate go run github.com/hacks1ash/goxmap/cmd/mapper-gen -src Event -dst EventDTO
+//go:generate go run github.com/hacks1ash/goxmap -src Event -dst EventDTO
 
 // Event is the domain model with rich Go types.
 type Event struct {

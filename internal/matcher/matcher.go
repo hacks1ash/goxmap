@@ -37,6 +37,12 @@ type FieldPair struct {
 
 	// CastType is the destination type name to use for numeric casts (e.g. "int32").
 	CastType string
+
+	// TypeCast is true when src and dst are different named types with the same
+	// underlying type (e.g., type StatusA string -> type StatusB string).
+	TypeCast bool
+	// CastTypeName is the destination type name for named type casts.
+	CastTypeName string
 }
 
 // PointerConversion describes how to handle pointer differences between matched fields.
@@ -105,6 +111,52 @@ func IsNumericType(t string) bool {
 	return numericTypes[t]
 }
 
+// numericFamily classifies numeric types into signed, unsigned, or float families.
+type numericFamily int
+
+const (
+	familySigned numericFamily = iota
+	familyUnsigned
+	familyFloat
+)
+
+// numericRank maps numeric types to their bit width for narrowing detection.
+// Platform-dependent types (int, uint) use 64 because they may be 64-bit.
+var numericRank = map[string]int{
+	"int8": 8, "int16": 16, "int32": 32, "int64": 64, "int": 64,
+	"uint8": 8, "byte": 8, "uint16": 16, "uint32": 32, "uint64": 64, "uint": 64,
+	"float32": 32, "float64": 64,
+	"rune": 32,
+}
+
+// getFamily returns the numeric family for a given type name.
+func getFamily(t string) numericFamily {
+	switch t {
+	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
+		return familyUnsigned
+	case "float32", "float64":
+		return familyFloat
+	default:
+		return familySigned
+	}
+}
+
+// IsNarrowingCast reports whether a numeric conversion from src to dst may lose data.
+// Cross-family conversions (signed<->unsigned, int<->float) are always narrowing.
+// Same-family conversions are narrowing when destination has fewer bits than source.
+func IsNarrowingCast(src, dst string) bool {
+	srcFamily := getFamily(src)
+	dstFamily := getFamily(dst)
+
+	// Cross-family is always considered narrowing (potential overflow or precision loss).
+	if srcFamily != dstFamily {
+		return true
+	}
+
+	// Same family: narrowing if destination rank is smaller than source rank.
+	return numericRank[dst] < numericRank[src]
+}
+
 // classifyPair sets the NumericCast/TypeMismatch fields on a FieldPair based
 // on the element types of the source and destination fields.
 func classifyPair(pair *FieldPair) {
@@ -130,8 +182,22 @@ func classifyPair(pair *FieldPair) {
 
 	// Check for numeric-to-numeric coercion.
 	if IsNumericType(srcElem) && IsNumericType(dstElem) {
+		if IsNarrowingCast(srcElem, dstElem) {
+			// Narrowing casts are treated as type mismatches, requiring an
+			// explicit converter function to prevent silent data loss.
+			pair.TypeMismatch = true
+			return
+		}
 		pair.NumericCast = true
 		pair.CastType = dstElem
+		return
+	}
+
+	// Same-underlying-type cast (enum support).
+	if pair.Src.IsNamedNonStruct && pair.Dst.IsNamedNonStruct &&
+		pair.Src.UnderlyingTypeName == pair.Dst.UnderlyingTypeName {
+		pair.TypeCast = true
+		pair.CastTypeName = pair.Dst.ElemType
 		return
 	}
 
@@ -155,6 +221,11 @@ func Match(src, dst *loader.StructInfo) MatchResult {
 	var result MatchResult
 
 	for _, df := range dst.Fields {
+		// Skip fields marked with mapper:"ignore".
+		if df.Ignore {
+			continue
+		}
+
 		var matched bool
 		var srcField loader.StructField
 
@@ -223,6 +294,10 @@ func MatchCross(internal, external *loader.StructInfo, getters map[string]loader
 	var fromExtResult MatchResult
 
 	for _, inf := range internal.Fields {
+		if inf.Ignore {
+			continue
+		}
+
 		var matched bool
 		var extField loader.StructField
 
@@ -265,16 +340,19 @@ func MatchCross(internal, external *loader.StructInfo, getters map[string]loader
 		}
 
 		// ToExternal: internal (src) -> external (dst).
-		toExtResult.Pairs = append(toExtResult.Pairs, FieldPair{
+		toExtPair := FieldPair{
 			Src: inf,
 			Dst: extField,
-		})
+		}
+		classifyPair(&toExtPair)
+		toExtResult.Pairs = append(toExtResult.Pairs, toExtPair)
 
 		// FromExternal: external (src) -> internal (dst).
 		fromExtPair := FieldPair{
 			Src: extField,
 			Dst: inf,
 		}
+		classifyPair(&fromExtPair)
 
 		// Check for getter on the external struct.
 		if getters != nil {

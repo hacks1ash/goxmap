@@ -2,11 +2,7 @@ module github.com/hacks1ash/goxmap
 
 go 1.25.5
 
-require (
-	github.com/jinzhu/copier v0.4.0
-	github.com/mitchellh/mapstructure v1.5.0
-	golang.org/x/tools v0.43.0
-)
+require golang.org/x/tools v0.43.0
 
 require (
 	golang.org/x/mod v0.34.0 // indirect

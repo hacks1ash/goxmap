@@ -175,8 +175,9 @@ func GenerateCross(ccfg CrossConfig) ([]byte, error) {
 // source using the getter method instead of direct field access.
 func renderCrossFunc(buf *bytes.Buffer, funcName, srcType, dstType string, pairs []matcher.FieldPair, useGetters bool) {
 	fmt.Fprintf(buf, "// %s maps %s to %s.\n", funcName, srcType, dstType)
-	fmt.Fprintf(buf, "func %s(src %s) %s {\n", funcName, srcType, dstType)
-	fmt.Fprintf(buf, "\tvar dst %s\n", dstType)
+	fmt.Fprintf(buf, "func %s(src *%s) *%s {\n", funcName, srcType, dstType)
+	fmt.Fprintf(buf, "\tif src == nil { return nil }\n")
+	fmt.Fprintf(buf, "\tdst := &%s{}\n", dstType)
 
 	for _, pair := range pairs {
 		srcExpr := "src." + pair.Src.Name
@@ -351,8 +352,10 @@ func (g *multiGenerator) renderDelegated(entry funcEntry) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "// %s maps %s to %s using a custom mapper function.\n",
 		entry.FuncName, entry.SrcType, entry.DstType)
-	fmt.Fprintf(&buf, "func %s(src %s) %s {\n", entry.FuncName, entry.SrcType, entry.DstType)
-	fmt.Fprintf(&buf, "\treturn %s(%s(src))\n", entry.DstType, entry.StructMapperFn)
+	fmt.Fprintf(&buf, "func %s(src *%s) *%s {\n", entry.FuncName, entry.SrcType, entry.DstType)
+	fmt.Fprintf(&buf, "\tif src == nil { return nil }\n")
+	fmt.Fprintf(&buf, "\tv := %s(%s(*src))\n", entry.DstType, entry.StructMapperFn)
+	fmt.Fprintf(&buf, "\treturn &v\n")
 	fmt.Fprintf(&buf, "}\n")
 	return buf.Bytes(), nil
 }
@@ -361,8 +364,9 @@ func (g *multiGenerator) renderFieldLevel(entry funcEntry) ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "// %s maps %s to %s.\n",
 		entry.FuncName, entry.SrcType, entry.DstType)
-	fmt.Fprintf(&buf, "func %s(src %s) %s {\n", entry.FuncName, entry.SrcType, entry.DstType)
-	fmt.Fprintf(&buf, "\tvar dst %s\n", entry.DstType)
+	fmt.Fprintf(&buf, "func %s(src *%s) *%s {\n", entry.FuncName, entry.SrcType, entry.DstType)
+	fmt.Fprintf(&buf, "\tif src == nil { return nil }\n")
+	fmt.Fprintf(&buf, "\tdst := &%s{}\n", entry.DstType)
 
 	for _, pair := range entry.Pairs {
 		expr, err := g.buildAssignmentMulti(pair)
@@ -506,25 +510,23 @@ func (g *multiGenerator) buildNestedStructMapping(pair matcher.FieldPair, srcExp
 
 	switch {
 	case !srcIsPtr && !dstIsPtr:
-		return mapperFn + "(" + srcExpr + ")"
+		// Safe to deref: &src.Field is never nil (src itself is nil-guarded), so mapper always returns non-nil.
+		return fmt.Sprintf("*%s(&%s)", mapperFn, srcExpr)
 
 	case srcIsPtr && !dstIsPtr:
+		// src field is a pointer: pass directly to mapper, deref the *T result to T
 		return fmt.Sprintf(
-			"func() %s { if %s != nil { return %s(*%s) }; var zero %s; return zero }()",
-			pair.Dst.StructName, srcExpr, mapperFn, srcExpr, pair.Dst.StructName,
+			"func() %s { if v := %s(%s); v != nil { return *v }; var zero %s; return zero }()",
+			pair.Dst.StructName, mapperFn, srcExpr, pair.Dst.StructName,
 		)
 
 	case !srcIsPtr && dstIsPtr:
-		return fmt.Sprintf(
-			"func() *%s { v := %s(%s); return &v }()",
-			pair.Dst.StructName, mapperFn, srcExpr,
-		)
+		// src field is a value: take address to pass to mapper, result is *T (what dst wants)
+		return fmt.Sprintf("%s(&%s)", mapperFn, srcExpr)
 
 	default:
-		return fmt.Sprintf(
-			"func() *%s { if %s != nil { v := %s(*%s); return &v }; return nil }()",
-			pair.Dst.StructName, srcExpr, mapperFn, srcExpr,
-		)
+		// src field is a pointer: pass directly, mapper handles nil, result is *T (what dst wants)
+		return fmt.Sprintf("%s(%s)", mapperFn, srcExpr)
 	}
 }
 
@@ -535,13 +537,6 @@ func (g *multiGenerator) buildSliceMapping(pair matcher.FieldPair, srcExpr strin
 	if pair.Dst.SliceElemIsPtr {
 		dstElemType = "*" + dstElemType
 	}
-
-	srcElemType := pair.Src.SliceElemTypeName
-	if pair.Src.SliceElemIsPtr {
-		srcElemType = "*" + srcElemType
-	}
-
-	_ = srcElemType
 
 	var b strings.Builder
 
@@ -554,22 +549,26 @@ func (g *multiGenerator) buildSliceMapping(pair matcher.FieldPair, srcExpr strin
 
 	switch {
 	case !srcElemIsPtr && !dstElemIsPtr:
-		fmt.Fprintf(&b, "\t\t\tdst.%s[i] = %s(v)\n", pair.Dst.Name, mapperFn)
+		// v is a value elem: need addressable temp to pass as *T; deref *T result to T
+		fmt.Fprintf(&b, "\t\t\titem := v\n")
+		fmt.Fprintf(&b, "\t\t\tdst.%s[i] = *%s(&item)\n", pair.Dst.Name, mapperFn)
 
 	case srcElemIsPtr && !dstElemIsPtr:
+		// v is already *T: pass directly to mapper; mapper returns *T, deref to T
 		fmt.Fprintf(&b, "\t\t\tif v != nil {\n")
-		fmt.Fprintf(&b, "\t\t\t\tdst.%s[i] = %s(*v)\n", pair.Dst.Name, mapperFn)
+		fmt.Fprintf(&b, "\t\t\t\tif r := %s(v); r != nil {\n", mapperFn)
+		fmt.Fprintf(&b, "\t\t\t\t\tdst.%s[i] = *r\n", pair.Dst.Name)
+		fmt.Fprintf(&b, "\t\t\t\t}\n")
 		fmt.Fprintf(&b, "\t\t\t}\n")
 
 	case !srcElemIsPtr && dstElemIsPtr:
-		fmt.Fprintf(&b, "\t\t\tmapped := %s(v)\n", mapperFn)
-		fmt.Fprintf(&b, "\t\t\tdst.%s[i] = &mapped\n", pair.Dst.Name)
+		// v is a value elem: addressable temp; mapper returns *T which is what dst wants
+		fmt.Fprintf(&b, "\t\t\titem := v\n")
+		fmt.Fprintf(&b, "\t\t\tdst.%s[i] = %s(&item)\n", pair.Dst.Name, mapperFn)
 
 	default:
-		fmt.Fprintf(&b, "\t\t\tif v != nil {\n")
-		fmt.Fprintf(&b, "\t\t\t\tmapped := %s(*v)\n", mapperFn)
-		fmt.Fprintf(&b, "\t\t\t\tdst.%s[i] = &mapped\n", pair.Dst.Name)
-		fmt.Fprintf(&b, "\t\t\t}\n")
+		// v is already *T: pass directly; mapper handles nil and returns *T
+		fmt.Fprintf(&b, "\t\t\tdst.%s[i] = %s(v)\n", pair.Dst.Name, mapperFn)
 	}
 
 	fmt.Fprint(&b, "\t\t}\n")
@@ -629,8 +628,10 @@ func generateDelegated(cfg Config) ([]byte, error) {
 package {{ .PackageName }}
 
 // {{ .FuncName }} maps {{ .SrcType }} to {{ .DstType }} using a custom mapper function.
-func {{ .FuncName }}(src {{ .SrcType }}) {{ .DstType }} {
-	return {{ .DstType }}(` + cfg.StructMapperFn + `(src))
+func {{ .FuncName }}(src *{{ .SrcType }}) *{{ .DstType }} {
+	if src == nil { return nil }
+	v := {{ .DstType }}(` + cfg.StructMapperFn + `(*src))
+	return &v
 }
 `
 	return executeTemplate(tmplText, data)
@@ -641,8 +642,9 @@ const fieldLevelTmpl = `// Code generated by goxmap; DO NOT EDIT.
 package {{ .PackageName }}
 
 // {{ .FuncName }} maps {{ .SrcType }} to {{ .DstType }}.
-func {{ .FuncName }}(src {{ .SrcType }}) {{ .DstType }} {
-	var dst {{ .DstType }}
+func {{ .FuncName }}(src *{{ .SrcType }}) *{{ .DstType }} {
+	if src == nil { return nil }
+	dst := &{{ .DstType }}{}
 {{- range .Assignments }}
 	dst.{{ .DstField }} = {{ .Expression }}
 {{- end }}

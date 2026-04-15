@@ -76,7 +76,6 @@ func RunCrossPackage(opts CrossPackageOptions) {
 	if opts.InternalType == opts.ExternalType {
 		prefix := pascalCase(externalInfo.PackageName)
 		extLabel = prefix + opts.ExternalType
-		intLabel = opts.InternalType
 	}
 
 	toExtFn := opts.FuncName

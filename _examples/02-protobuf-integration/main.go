@@ -33,9 +33,12 @@ type User struct {
 }
 
 // MapUserToProtoUser maps the internal User to the Protobuf User.
-// Generated code writes directly to the external struct's fields.
-func MapUserToProtoUser(src User) pb.User {
-	var dst pb.User
+// Generated code uses pointer-based signatures for type-safe nil handling.
+func MapUserToProtoUser(src *User) *pb.User {
+	if src == nil {
+		return nil
+	}
+	dst := &pb.User{}
 	dst.UserId = src.ID
 	dst.FullName = src.Name
 	dst.UserEmail = src.Email
@@ -44,9 +47,12 @@ func MapUserToProtoUser(src User) pb.User {
 }
 
 // MapProtoUserToUser maps the Protobuf User back to the internal User.
-// Generated code reads via getter methods for nil safety.
-func MapProtoUserToUser(src pb.User) User {
-	var dst User
+// Generated code uses pointer-based signatures and reads via getter methods for nil safety.
+func MapProtoUserToUser(src *pb.User) *User {
+	if src == nil {
+		return nil
+	}
+	dst := &User{}
 	dst.ID = src.GetUserId()
 	dst.Name = src.GetFullName()
 	dst.Email = src.GetUserEmail()
@@ -56,7 +62,7 @@ func MapProtoUserToUser(src pb.User) User {
 
 func main() {
 	// Internal -> Proto
-	internal := User{
+	internal := &User{
 		ID:    1,
 		Name:  "Alice Smith",
 		Email: "alice@example.com",
@@ -70,8 +76,8 @@ func main() {
 	restored := MapProtoUserToUser(proto)
 	fmt.Printf("Proto -> Internal: %+v\n", restored)
 
-	// Demonstrate nil-safety: getters on a zero-value struct return zero values
-	var empty pb.User
+	// Demonstrate nil-safety: pointer function returns nil for nil input
+	var empty *pb.User
 	safeResult := MapProtoUserToUser(empty)
-	fmt.Printf("Zero proto -> Internal: %+v\n", safeResult)
+	fmt.Printf("Nil proto -> Internal: %+v\n", safeResult)
 }

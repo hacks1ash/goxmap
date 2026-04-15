@@ -1,10 +1,11 @@
 # Example 03: Custom Converters
 
-Maps a domain `Event` to an API `EventDTO` using custom converter functions
-for `time.Time` formatting and tag normalization.
+Maps a domain `*Event` to an API `*EventDTO` using custom converter functions
+for `time.Time` formatting and tag normalization with pointer-based signatures.
 
 ## What it demonstrates
 
+- Pointer-based function signatures (`*Event -> *EventDTO`) for type-safe nil handling
 - `mapper:"func:FormatTime"` to convert `time.Time` to RFC3339 string
 - `mapper:"func:NormalizeTags"` to apply domain-specific string transformation
 - Custom functions are plain Go functions in the same package, no special interface required

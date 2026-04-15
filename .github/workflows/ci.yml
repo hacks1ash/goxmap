@@ -70,4 +70,5 @@ jobs:
           go-version: stable
 
       - name: Run benchmarks
-        run: go test -bench=. -benchmem -count=1 -timeout=10m ./benchmarks/
+        working-directory: benchmarks
+        run: go test -bench=. -benchmem -count=1 -timeout=10m ./...

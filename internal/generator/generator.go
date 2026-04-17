@@ -186,7 +186,7 @@ func renderCrossFunc(buf *bytes.Buffer, funcName, srcType, dstType string, pairs
 		// Skip getter when it returns a value type but the destination needs
 		// a pointer — direct field access preserves nil semantics.
 		useGetter := useGetters && pair.UseGetter && pair.GetterName != "" &&
-			!(pair.Src.IsPtr && !pair.GetterReturnsPtr && pair.Dst.IsPtr)
+			(!pair.Src.IsPtr || pair.GetterReturnsPtr || !pair.Dst.IsPtr)
 		if useGetter {
 			srcExpr = "src." + pair.GetterName + "()"
 		}

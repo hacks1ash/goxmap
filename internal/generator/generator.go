@@ -183,7 +183,11 @@ func renderCrossFunc(buf *bytes.Buffer, funcName, srcType, dstType string, pairs
 		srcExpr := "src." + pair.Src.Name
 
 		// Use getter if available and we are reading from external struct.
-		if useGetters && pair.UseGetter && pair.GetterName != "" {
+		// Skip getter when it returns a value type but the destination needs
+		// a pointer — direct field access preserves nil semantics.
+		useGetter := useGetters && pair.UseGetter && pair.GetterName != "" &&
+			!(pair.Src.IsPtr && !pair.GetterReturnsPtr && pair.Dst.IsPtr)
+		if useGetter {
 			srcExpr = "src." + pair.GetterName + "()"
 		}
 
@@ -211,6 +215,16 @@ func renderCrossFunc(buf *bytes.Buffer, funcName, srcType, dstType string, pairs
 		}
 
 		conv := pair.Conversion()
+
+		// When using a getter that returns a value type for a pointer field
+		// (e.g., proto GetCountry() string for Country *string), adjust the
+		// conversion since the getter already strips the pointer.
+		if useGetter && pair.Src.IsPtr && !pair.GetterReturnsPtr {
+			if conv == matcher.DerefConversion { // *T → T, but getter gives T → T
+				conv = matcher.NoneConversion
+			}
+		}
+
 		switch conv {
 		case matcher.NoneConversion:
 			fmt.Fprintf(buf, "\tdst.%s = %s\n", pair.Dst.Name, srcExpr)
@@ -219,8 +233,12 @@ func renderCrossFunc(buf *bytes.Buffer, funcName, srcType, dstType string, pairs
 			fmt.Fprintf(buf, "\t\tdst.%s = *%s\n", pair.Dst.Name, srcExpr)
 			fmt.Fprintf(buf, "\t}\n")
 		case matcher.AddrConversion:
+			elemType := pair.Src.ElemType
+			if pair.Dst.ElemType != "" {
+				elemType = pair.Dst.ElemType
+			}
 			fmt.Fprintf(buf, "\tdst.%s = func() *%s { v := %s; return &v }()\n",
-				pair.Dst.Name, pair.Src.ElemType, srcExpr)
+				pair.Dst.Name, elemType, srcExpr)
 		}
 	}
 

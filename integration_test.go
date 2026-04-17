@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1137,6 +1138,148 @@ type LocalUser struct {
 	t.Run("bidirectional_signatures", func(t *testing.T) {
 		assertContains(t, output, "func MapLocalUserToRemoteUser(src *LocalUser) *ext.RemoteUser")
 		assertContains(t, output, "func MapRemoteUserToLocalUser(src *ext.RemoteUser) *LocalUser")
+	})
+}
+
+// TestSuite4_EndToEnd_CrossPackage_ProtoOptionalFields verifies that proto
+// optional fields (pointer field + value getter) generate correct assignments.
+func TestSuite4_EndToEnd_CrossPackage_ProtoOptionalFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	modName := "example.com/prototest"
+
+	gomod := "module " + modName + "\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(gomod), 0644); err != nil {
+		t.Fatalf("writing go.mod: %v", err)
+	}
+
+	// Proto-style package with optional (pointer) fields and value-returning getters.
+	extPkgDir := filepath.Join(tmpDir, "pb")
+	if err := os.MkdirAll(extPkgDir, 0755); err != nil {
+		t.Fatalf("creating pb dir: %v", err)
+	}
+
+	pbSrc := `package pb
+
+type ProtoMessage struct {
+	Name    *string ` + "`json:\"name\"`" + `
+	Country *string ` + "`json:\"country\"`" + `
+	Age     *int    ` + "`json:\"age\"`" + `
+}
+
+func (x *ProtoMessage) GetName() string {
+	if x != nil && x.Name != nil {
+		return *x.Name
+	}
+	return ""
+}
+
+func (x *ProtoMessage) GetCountry() string {
+	if x != nil && x.Country != nil {
+		return *x.Country
+	}
+	return ""
+}
+
+func (x *ProtoMessage) GetAge() int {
+	if x != nil && x.Age != nil {
+		return *x.Age
+	}
+	return 0
+}
+`
+	if err := os.WriteFile(filepath.Join(extPkgDir, "message.go"), []byte(pbSrc), 0644); err != nil {
+		t.Fatalf("writing pb/message.go: %v", err)
+	}
+
+	appPkgDir := filepath.Join(tmpDir, "app")
+	if err := os.MkdirAll(appPkgDir, 0755); err != nil {
+		t.Fatalf("creating app dir: %v", err)
+	}
+
+	// Local struct with value fields (common case: proto *T -> local T).
+	appSrc := `package app
+
+type LocalModel struct {
+	Name    string  ` + "`json:\"name\" mapper:\"bind:Name\"`" + `
+	Country *string ` + "`json:\"country\" mapper:\"bind:Country\"`" + `
+	Age     int     ` + "`json:\"age\" mapper:\"bind:Age\"`" + `
+}
+`
+	if err := os.WriteFile(filepath.Join(appPkgDir, "model.go"), []byte(appSrc), 0644); err != nil {
+		t.Fatalf("writing app/model.go: %v", err)
+	}
+
+	appPctx, err := loader.LoadPackage(appPkgDir)
+	if err != nil {
+		t.Fatalf("LoadPackage(app): %v", err)
+	}
+
+	extPctx, err := loader.LoadExternalPackage(tmpDir, modName+"/pb")
+	if err != nil {
+		t.Fatalf("LoadExternalPackage(pb): %v", err)
+	}
+
+	localModel, err := loader.LoadStructFromPkg(appPctx, "LocalModel")
+	if err != nil {
+		t.Fatalf("load LocalModel: %v", err)
+	}
+
+	protoMsg, err := loader.LoadStructFromPkg(extPctx, "ProtoMessage")
+	if err != nil {
+		t.Fatalf("load ProtoMessage: %v", err)
+	}
+
+	getters := loader.DiscoverGetters(extPctx, "ProtoMessage")
+
+	crossResult := matcher.MatchCross(localModel, protoMsg, getters)
+
+	ccfg := generator.CrossConfig{
+		PackageName:          "app",
+		InternalType:         "LocalModel",
+		ExternalType:         "ProtoMessage",
+		ExternalPkgName:      "pb",
+		ExternalPkgPath:      modName + "/pb",
+		ToExternalFuncName:   "MapLocalModelToProtoMessage",
+		FromExternalFuncName: "MapProtoMessageToLocalModel",
+		ToExternalPairs:      crossResult.ToExternal.Pairs,
+		FromExternalPairs:    crossResult.FromExternal.Pairs,
+		Bidirectional:        true,
+	}
+
+	code, err := generator.GenerateCross(ccfg)
+	if err != nil {
+		t.Fatalf("GenerateCross: %v", err)
+	}
+
+	output := string(code)
+
+	t.Run("parses_as_valid_go", func(t *testing.T) {
+		parseAndVerify(t, code)
+	})
+
+	// Proto *string -> local string: getter returns string, so direct assignment (NoneConversion).
+	t.Run("proto_ptr_to_local_value_uses_getter_no_deref", func(t *testing.T) {
+		assertContains(t, output, "dst.Name = src.GetName()")
+		assertContains(t, output, "dst.Age = src.GetAge()")
+	})
+
+	// Proto *string -> local *string: skip getter, use direct field access to preserve nil.
+	t.Run("proto_ptr_to_local_ptr_skips_getter_for_nil_safety", func(t *testing.T) {
+		assertContains(t, output, "dst.Country = src.Country")
+	})
+
+	// Write and verify the file compiles.
+	genPath := filepath.Join(appPkgDir, "mapper_gen.go")
+	if err := os.WriteFile(genPath, code, 0644); err != nil {
+		t.Fatalf("writing generated file: %v", err)
+	}
+
+	t.Run("generated_code_compiles", func(t *testing.T) {
+		cmd := exec.Command("go", "build", "./...")
+		cmd.Dir = tmpDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("generated code does not compile:\n%s\n%s", out, output)
+		}
 	})
 }
 

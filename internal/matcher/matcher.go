@@ -8,6 +8,8 @@
 package matcher
 
 import (
+	"strings"
+
 	"github.com/hacks1ash/goxmap/internal/loader"
 )
 
@@ -43,6 +45,11 @@ type FieldPair struct {
 	TypeCast bool
 	// CastTypeName is the destination type name for named type casts.
 	CastTypeName string
+
+	// GetterReturnsPtr indicates whether the getter method returns a pointer type.
+	// For proto optional fields, the field is *T but the getter returns T.
+	// This is used to adjust pointer conversion when generating code with getters.
+	GetterReturnsPtr bool
 }
 
 // PointerConversion describes how to handle pointer differences between matched fields.
@@ -359,6 +366,7 @@ func MatchCross(internal, external *loader.StructInfo, getters map[string]loader
 			if gi, ok := getters[extField.Name]; ok {
 				fromExtPair.UseGetter = true
 				fromExtPair.GetterName = gi.MethodName
+				fromExtPair.GetterReturnsPtr = strings.HasPrefix(gi.ReturnType, "*")
 			}
 		}
 

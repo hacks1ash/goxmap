@@ -158,7 +158,7 @@ func TestGenerateMulti_NestedStruct(t *testing.T) {
 		t.Fatalf("LoadStructFromPkg(UserDTO): %v", err)
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	mcfg := MultiConfig{
 		PackageName: "testdata",
@@ -214,7 +214,7 @@ func TestGenerateMulti_NestedPtrStruct(t *testing.T) {
 		t.Fatalf("LoadStructFromPkg(UserWithPtrDTO): %v", err)
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	mcfg := MultiConfig{
 		PackageName: "testdata",
@@ -258,7 +258,7 @@ func TestGenerateMulti_MapperDiscovery(t *testing.T) {
 		t.Fatalf("LoadStructFromPkg(UserDTO): %v", err)
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	// Simulate that MapAddressToAddressDTO already exists.
 	existing := map[string]bool{
@@ -314,7 +314,7 @@ func TestGenerateMulti_CircularDependency(t *testing.T) {
 		t.Fatalf("LoadStructFromPkg(ParentDTO): %v", err)
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	mcfg := MultiConfig{
 		PackageName: "testdata",

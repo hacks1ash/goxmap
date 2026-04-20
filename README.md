@@ -310,10 +310,16 @@ type User struct {
 }
 ```
 
+Both `-src` and `-dst` accept three reference forms:
+
+- **Bare** (`User`) — type in the current package
+- **Module-relative** (`models.User`) — resolves to `<module>/models`
+- **Full import path** (`github.com/org/repo/proto.User`)
+
 ```bash
 go run github.com/hacks1ash/goxmap \
-    -src User -dst ExternalUser \
-    -external-pkg github.com/org/repo/proto \
+    -src User \
+    -dst github.com/org/repo/proto.ExternalUser \
     -bidi
 ```
 
@@ -340,14 +346,15 @@ Tags can be combined with `;`: `mapper:"bind:FullName;func:Trim"`
 goxmap [flags]
 
 Flags:
-  -src            Source struct type name (required)
-  -dst            Destination struct type name (required)
+  -src            Source struct reference (required). Bare name, module-relative (pkg.Type), or full import path (github.com/org/repo/pkg.Type).
+  -dst            Destination struct reference (required). Same formats as -src.
   -func           Generated function name (default: Map<Src>To<Dst>)
   -dir            Package directory (default: $GOFILE dir or ".")
   -output         Output file name (default: <dst_snake>_mapper_gen.go)
   -struct-func    Delegate entire mapping to this function
-  -external-pkg   Import path for cross-package mapping
-  -bidi           Generate bidirectional mappers (same-package or cross-package)
+  -getters        Force getter-based field reads
+  -no-getters     Force direct field reads
+  -bidi           Generate bidirectional mappers
 ```
 
 ---

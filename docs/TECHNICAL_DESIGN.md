@@ -704,19 +704,20 @@ Because the tool is invoked via `go run`, it does not require a pre-built binary
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `-src` | Yes | | Source (or internal) struct type name |
-| `-dst` | Yes | | Destination (or external) struct type name |
+| `-src` | Yes | | Source struct reference: bare name, `pkg.Type`, or `github.com/org/repo/pkg.Type` |
+| `-dst` | Yes | | Destination struct reference: bare name, `pkg.Type`, or `github.com/org/repo/pkg.Type` |
 | `-func` | No | `Map<Src>To<Dst>` | Generated function name |
 | `-dir` | No | `$GOFILE` dir or `.` | Package directory |
 | `-output` | No | `<dst_snake>_mapper_gen.go` | Output file name |
 | `-struct-func` | No | | Delegate entire mapping to this function |
-| `-external-pkg` | No | | Import path for cross-package mode |
+| `-getters` | No | | Force getter-based field reads |
+| `-no-getters` | No | | Force direct field reads |
 | `-bidi` | No | `false` | Generate bidirectional mappers (same-package or cross-package) |
 
 The CLI operates in two modes:
 
 1. **Same-package mode** (default): Loads a single package, matches fields, resolves type mismatches (numeric coercion, converter discovery), discovers existing mappers, and generates via `GenerateMulti`. When `-bidi` is set, also generates the reverse mapper.
-2. **Cross-package mode** (when `-external-pkg` is set): Loads both packages, discovers getters on the external type, performs cross matching, and generates via `GenerateCross`.
+2. **Cross-package mode** (when `-src` or `-dst` contains a qualified reference with a package path): Loads both packages, discovers getters on the external type, performs cross matching, and generates via `GenerateCross`.
 
 ---
 

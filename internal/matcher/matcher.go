@@ -13,6 +13,24 @@ import (
 	"github.com/hacks1ash/goxmap/internal/loader"
 )
 
+// GetterMode controls whether the generated mapper reads fields via getter
+// methods or directly.
+type GetterMode int
+
+const (
+	GetterModeAuto     GetterMode = iota // Use getter when one exists, else direct field access.
+	GetterModeForce                       // Always use getter; mark MissingGetterForce when absent.
+	GetterModeDisabled                    // Always use direct field access.
+)
+
+// MatchOptions configures Match behavior. SrcGetters and DstGetters map field
+// names to discovered getter methods on the corresponding struct.
+type MatchOptions struct {
+	SrcGetters map[string]loader.GetterInfo
+	DstGetters map[string]loader.GetterInfo
+	GetterMode GetterMode
+}
+
 // FieldPair represents a matched pair of fields between source and destination structs.
 type FieldPair struct {
 	Src loader.StructField
@@ -50,6 +68,11 @@ type FieldPair struct {
 	// For proto optional fields, the field is *T but the getter returns T.
 	// This is used to adjust pointer conversion when generating code with getters.
 	GetterReturnsPtr bool
+
+	// MissingGetterForce indicates that GetterMode was Force but no getter was
+	// discovered for the source field. The caller is expected to surface this as
+	// a fatal CLI error.
+	MissingGetterForce bool
 }
 
 // PointerConversion describes how to handle pointer differences between matched fields.
@@ -212,14 +235,27 @@ func classifyPair(pair *FieldPair) {
 	pair.TypeMismatch = true
 }
 
-// Match finds corresponding fields between the source and destination structs.
-// This is the original same-package matcher.
-func Match(src, dst *loader.StructInfo) MatchResult {
-	srcByJSON := make(map[string]loader.StructField)
+// Match finds corresponding fields between the source and destination structs
+// using a unified 4-priority strategy. Bind tags (BindName, BindJSON) on the
+// destination field are consulted first, followed by JSON tag matching, then
+// field name matching. opts controls getter probing behavior.
+//
+// Passing MatchOptions{} (zero value) is identical to the old 2-arg Match call.
+func Match(src, dst *loader.StructInfo, opts MatchOptions) MatchResult {
+	// Build source lookup maps.
+	// When a src field carries a BindName, that alias takes precedence over the
+	// field's own Go name in the lookup table. This lets a src field declare an
+	// alternate identity so dst fields with that name resolve to it.
 	srcByName := make(map[string]loader.StructField)
+	srcByJSON := make(map[string]loader.StructField)
 
 	for _, f := range src.Fields {
-		srcByName[f.Name] = f
+		if f.BindName != "" {
+			// Register under the alias only; the original name is shadowed.
+			srcByName[f.BindName] = f
+		} else {
+			srcByName[f.Name] = f
+		}
 		if f.JSONName != "" {
 			srcByJSON[f.JSONName] = f
 		}
@@ -236,13 +272,31 @@ func Match(src, dst *loader.StructInfo) MatchResult {
 		var matched bool
 		var srcField loader.StructField
 
-		if df.JSONName != "" {
+		// Priority 1: bind tag on dst — direct src field name binding.
+		if df.BindName != "" {
+			if sf, ok := srcByName[df.BindName]; ok {
+				srcField = sf
+				matched = true
+			}
+		}
+
+		// Priority 2: bind_json tag on dst — find src field by its json tag.
+		if !matched && df.BindJSON != "" {
+			if sf, ok := srcByJSON[df.BindJSON]; ok {
+				srcField = sf
+				matched = true
+			}
+		}
+
+		// Priority 3: json tag match.
+		if !matched && df.JSONName != "" {
 			if sf, ok := srcByJSON[df.JSONName]; ok {
 				srcField = sf
 				matched = true
 			}
 		}
 
+		// Priority 4: field name match.
 		if !matched {
 			if sf, ok := srcByName[df.Name]; ok {
 				srcField = sf
@@ -256,6 +310,33 @@ func Match(src, dst *loader.StructInfo) MatchResult {
 				Dst: df,
 			}
 			classifyPair(&pair)
+
+			// Apply getter rules using opts.SrcGetters.
+			switch opts.GetterMode {
+			case GetterModeAuto:
+				if opts.SrcGetters != nil {
+					if gi, ok := opts.SrcGetters[srcField.Name]; ok {
+						pair.UseGetter = true
+						pair.GetterName = gi.MethodName
+						pair.GetterReturnsPtr = strings.HasPrefix(gi.ReturnType, "*")
+					}
+				}
+			case GetterModeForce:
+				if opts.SrcGetters != nil {
+					if gi, ok := opts.SrcGetters[srcField.Name]; ok {
+						pair.UseGetter = true
+						pair.GetterName = gi.MethodName
+						pair.GetterReturnsPtr = strings.HasPrefix(gi.ReturnType, "*")
+					} else {
+						pair.MissingGetterForce = true
+					}
+				} else {
+					pair.MissingGetterForce = true
+				}
+			case GetterModeDisabled:
+				// Always use direct field access — nothing to do.
+			}
+
 			result.Pairs = append(result.Pairs, pair)
 		} else {
 			result.Unmatched = append(result.Unmatched, df)
@@ -265,116 +346,3 @@ func Match(src, dst *loader.StructInfo) MatchResult {
 	return result
 }
 
-// CrossMatchResult holds bidirectional matching results for cross-package mapping.
-type CrossMatchResult struct {
-	// ToExternal contains pairs for mapping internal -> external.
-	// Src is always the internal field, Dst is the external field.
-	ToExternal MatchResult
-
-	// FromExternal contains pairs for mapping external -> internal.
-	// Src is the external field, Dst is the internal field.
-	FromExternal MatchResult
-}
-
-// MatchCross performs cross-package field matching using the 4-level priority:
-//  1. bind tag on internal field -> direct external field name
-//  2. bind_json tag on internal field -> external field by json tag
-//  3. json tag match
-//  4. field name match
-//
-// The internal struct is the one with mapper tags (bind/bind_json).
-// The external struct comes from a different package (e.g., Protobuf).
-// getters maps field names to GetterInfo for the external struct (may be nil).
-func MatchCross(internal, external *loader.StructInfo, getters map[string]loader.GetterInfo) CrossMatchResult {
-	// Build external lookup maps.
-	extByName := make(map[string]loader.StructField)
-	extByJSON := make(map[string]loader.StructField)
-
-	for _, f := range external.Fields {
-		extByName[f.Name] = f
-		if f.JSONName != "" {
-			extByJSON[f.JSONName] = f
-		}
-	}
-
-	var toExtResult MatchResult
-	var fromExtResult MatchResult
-
-	for _, inf := range internal.Fields {
-		if inf.Ignore {
-			continue
-		}
-
-		var matched bool
-		var extField loader.StructField
-
-		// Priority 1: bind tag - direct field name binding.
-		if inf.BindName != "" {
-			if ef, ok := extByName[inf.BindName]; ok {
-				extField = ef
-				matched = true
-			}
-		}
-
-		// Priority 2: bind_json tag - find external field by its json tag.
-		if !matched && inf.BindJSON != "" {
-			if ef, ok := extByJSON[inf.BindJSON]; ok {
-				extField = ef
-				matched = true
-			}
-		}
-
-		// Priority 3: json tag match.
-		if !matched && inf.JSONName != "" {
-			if ef, ok := extByJSON[inf.JSONName]; ok {
-				extField = ef
-				matched = true
-			}
-		}
-
-		// Priority 4: field name match.
-		if !matched {
-			if ef, ok := extByName[inf.Name]; ok {
-				extField = ef
-				matched = true
-			}
-		}
-
-		if !matched {
-			toExtResult.Unmatched = append(toExtResult.Unmatched, inf)
-			fromExtResult.Unmatched = append(fromExtResult.Unmatched, inf)
-			continue
-		}
-
-		// ToExternal: internal (src) -> external (dst).
-		toExtPair := FieldPair{
-			Src: inf,
-			Dst: extField,
-		}
-		classifyPair(&toExtPair)
-		toExtResult.Pairs = append(toExtResult.Pairs, toExtPair)
-
-		// FromExternal: external (src) -> internal (dst).
-		fromExtPair := FieldPair{
-			Src: extField,
-			Dst: inf,
-		}
-		classifyPair(&fromExtPair)
-
-		// Check for getter on the external struct.
-		if getters != nil {
-			if gi, ok := getters[extField.Name]; ok {
-				fromExtPair.UseGetter = true
-				fromExtPair.GetterName = gi.MethodName
-				fromExtPair.GetterReturnsPtr = strings.HasPrefix(gi.ReturnType, "*")
-			}
-		}
-
-		fromExtResult.Pairs = append(fromExtResult.Pairs, fromExtPair)
-	}
-
-	return CrossMatchResult{
-		ToExternal:   toExtResult,
-		FromExternal: fromExtResult,
-	}
-}

@@ -18,8 +18,16 @@ benchmarks/results.txt
 # Claude Code
 .claude/
 
+# Git worktrees
+.worktrees/
+
 /launch
 /goxmap
 /plans/
 
 TODO.md
+.gitnexus
+/docs/superpowers/
+/release-notes/
+/AGENTS.md
+/CLAUDE.md

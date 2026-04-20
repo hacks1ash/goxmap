@@ -41,6 +41,52 @@ func TestRun_SamePackage(t *testing.T) {
 	}
 }
 
+// TestRun_SamePackage_Idempotent guards against a regression where the second
+// invocation of Run in the same package produces an empty function body because
+// the previously-generated mapper is discovered by DiscoverMapperFuncs and
+// treated as "already existing", causing enqueue to skip it entirely.
+func TestRun_SamePackage_Idempotent(t *testing.T) {
+	root := writeMod(t)
+	workDir := filepath.Join(root, "a")
+	if err := os.WriteFile(filepath.Join(workDir, "a.go"),
+		[]byte("package a\n\ntype Src struct { Value string }\ntype Dst struct { Value string }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := reference.Parse("Src")
+	dst, _ := reference.Parse("Dst")
+	opts := RunOptions{
+		WorkDir:    workDir,
+		Src:        src,
+		Dst:        dst,
+		Output:     "mapper_gen.go",
+		GetterMode: matcher.GetterModeAuto,
+	}
+
+	// First generation.
+	if err := Run(opts); err != nil {
+		t.Fatalf("Run (first): %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(workDir, "mapper_gen.go"))
+	if err != nil {
+		t.Fatalf("reading first output: %v", err)
+	}
+	if !strings.Contains(string(first), "func MapSrcToDst") {
+		t.Fatalf("first run: expected MapSrcToDst, got:\n%s", first)
+	}
+
+	// Second generation — must produce an identical non-empty file.
+	if err := Run(opts); err != nil {
+		t.Fatalf("Run (second): %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(workDir, "mapper_gen.go"))
+	if err != nil {
+		t.Fatalf("reading second output: %v", err)
+	}
+	if !strings.Contains(string(second), "func MapSrcToDst") {
+		t.Fatalf("second run produced empty body (regression); got:\n%s", second)
+	}
+}
+
 func TestRun_QualifiedDst_GeneratesFile(t *testing.T) {
 	root := writeMod(t) // helper from resolve_refs_test.go
 	workDir := filepath.Join(root, "a")

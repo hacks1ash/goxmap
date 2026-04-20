@@ -78,10 +78,18 @@ func runSamePkg(opts RunOptions, rr *ResolvedRefs, srcGetters, dstGetters map[st
 		StructMapperFn: structMapper,
 	}
 
+	// DiscoverMapperFuncs finds functions already in the package so that nested
+	// helper mappers are not re-generated. The root function (and reverse, if
+	// bidi) must be removed from this set: they are the ones we are about to
+	// regenerate, and treating them as "existing" would cause enqueue to skip
+	// them entirely, producing an empty output file.
+	existingMappers := loader.DiscoverMapperFuncs(rr.Dst.Pctx)
+	delete(existingMappers, funcName)
+
 	mcfg := generator.MultiConfig{
 		PackageName:     rr.OutputPackageName,
 		RootFunc:        rootCfg,
-		ExistingMappers: loader.DiscoverMapperFuncs(rr.Dst.Pctx),
+		ExistingMappers: existingMappers,
 		PkgContext:      rr.Dst.Pctx,
 	}
 
@@ -97,9 +105,11 @@ func runSamePkg(opts RunOptions, rr *ResolvedRefs, srcGetters, dstGetters map[st
 		}
 		warnUnmatched(revResult.Unmatched, rr.Src.Info.Name, true)
 		ResolveTypeMismatches(rr.Src.Pctx, revResult.Pairs, rr.Dst.Info.Name)
+		revFuncName := "Map" + rr.Dst.Info.Name + "To" + rr.Src.Info.Name
+		delete(existingMappers, revFuncName)
 		revCfg := generator.Config{
 			PackageName: rr.OutputPackageName,
-			FuncName:    "Map" + rr.Dst.Info.Name + "To" + rr.Src.Info.Name,
+			FuncName:    revFuncName,
 			SrcType:     rr.Dst.Info.Name,
 			DstType:     rr.Src.Info.Name,
 			Pairs:       revResult.Pairs,

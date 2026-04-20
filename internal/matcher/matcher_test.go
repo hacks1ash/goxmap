@@ -82,7 +82,7 @@ func TestMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Match(tt.src, tt.dst)
+			result := Match(tt.src, tt.dst, MatchOptions{})
 
 			if got := len(result.Pairs); got != tt.wantPairs {
 				t.Errorf("got %d pairs, want %d", got, tt.wantPairs)
@@ -234,7 +234,7 @@ func TestMatch_NumericCast_Widening(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 2 {
 		t.Fatalf("got %d pairs, want 2", got)
 	}
@@ -271,7 +271,7 @@ func TestMatch_NumericCast_Narrowing(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 2 {
 		t.Fatalf("got %d pairs, want 2", got)
 	}
@@ -298,7 +298,7 @@ func TestMatch_TypeMismatch(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 1 {
 		t.Fatalf("got %d pairs, want 1", got)
 	}
@@ -324,7 +324,7 @@ func TestMatch_CustomMapperPreventsTypeMismatch(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 1 {
 		t.Fatalf("got %d pairs, want 1", got)
 	}
@@ -351,7 +351,7 @@ func TestMatch_PtrNumericCast_Widening(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 1 {
 		t.Fatalf("got %d pairs, want 1", got)
 	}
@@ -378,7 +378,7 @@ func TestMatch_PtrNumericCast_Narrowing(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 1 {
 		t.Fatalf("got %d pairs, want 1", got)
 	}
@@ -668,7 +668,7 @@ func TestMatch_IgnoreDstField(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 
 	// Ignored field must not appear in pairs.
 	for _, p := range result.Pairs {
@@ -703,7 +703,7 @@ func TestMatch_OptionalUnmatchedDstField(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 
 	if got := len(result.Pairs); got != 1 {
 		t.Errorf("got %d pairs, want 1", got)
@@ -882,7 +882,7 @@ func TestMatch_EnumNamedTypes(t *testing.T) {
 		},
 	}
 
-	result := Match(src, dst)
+	result := Match(src, dst, MatchOptions{})
 	if got := len(result.Pairs); got != 2 {
 		t.Fatalf("got %d pairs, want 2", got)
 	}
@@ -906,5 +906,71 @@ func TestMatch_EnumNamedTypes(t *testing.T) {
 	}
 	if rolePair.CastTypeName != "RoleB" {
 		t.Errorf("Role: CastTypeName got %q, want %q", rolePair.CastTypeName, "RoleB")
+	}
+}
+
+func TestMatch_AutoGetterDetected(t *testing.T) {
+	src := &loader.StructInfo{
+		Name: "Src",
+		Fields: []loader.StructField{
+			{Name: "Name", TypeStr: "string", ElemType: "string"},
+		},
+	}
+	dst := &loader.StructInfo{
+		Name: "Dst",
+		Fields: []loader.StructField{
+			{Name: "Name", TypeStr: "string", ElemType: "string"},
+		},
+	}
+	srcGetters := map[string]loader.GetterInfo{
+		"Name": {MethodName: "GetName", FieldName: "Name", ReturnType: "string"},
+	}
+	res := Match(src, dst, MatchOptions{
+		SrcGetters: srcGetters,
+		GetterMode: GetterModeAuto,
+	})
+	if len(res.Pairs) != 1 {
+		t.Fatalf("expected 1 pair, got %d", len(res.Pairs))
+	}
+	if !res.Pairs[0].UseGetter || res.Pairs[0].GetterName != "GetName" {
+		t.Fatalf("expected getter use, got %+v", res.Pairs[0])
+	}
+}
+
+func TestMatch_DisabledGetterIgnored(t *testing.T) {
+	src := &loader.StructInfo{Fields: []loader.StructField{{Name: "Name", TypeStr: "string", ElemType: "string"}}}
+	dst := &loader.StructInfo{Fields: []loader.StructField{{Name: "Name", TypeStr: "string", ElemType: "string"}}}
+	srcGetters := map[string]loader.GetterInfo{"Name": {MethodName: "GetName", FieldName: "Name", ReturnType: "string"}}
+	res := Match(src, dst, MatchOptions{SrcGetters: srcGetters, GetterMode: GetterModeDisabled})
+	if res.Pairs[0].UseGetter {
+		t.Fatalf("expected no getter use under GetterModeDisabled, got %+v", res.Pairs[0])
+	}
+}
+
+func TestMatch_ForceGetterMissing(t *testing.T) {
+	src := &loader.StructInfo{Fields: []loader.StructField{{Name: "Name", TypeStr: "string", ElemType: "string"}}}
+	dst := &loader.StructInfo{Fields: []loader.StructField{{Name: "Name", TypeStr: "string", ElemType: "string"}}}
+	res := Match(src, dst, MatchOptions{GetterMode: GetterModeForce})
+	if !res.Pairs[0].MissingGetterForce {
+		t.Fatalf("expected MissingGetterForce, got %+v", res.Pairs[0])
+	}
+}
+
+func TestMatch_BindTagPriority(t *testing.T) {
+	src := &loader.StructInfo{
+		Fields: []loader.StructField{
+			{Name: "FullName", TypeStr: "string", ElemType: "string", BindName: "Name"},
+		},
+	}
+	dst := &loader.StructInfo{
+		Fields: []loader.StructField{
+			{Name: "Name", TypeStr: "string", ElemType: "string"},
+			{Name: "FullName", TypeStr: "string", ElemType: "string"},
+		},
+	}
+	res := Match(src, dst, MatchOptions{})
+	// src.FullName has BindName "Name" -> should match dst.Name (not dst.FullName by name).
+	if len(res.Pairs) != 1 || res.Pairs[0].Dst.Name != "Name" || res.Pairs[0].Src.Name != "FullName" {
+		t.Fatalf("bind tag priority not honored, got %+v", res.Pairs)
 	}
 }

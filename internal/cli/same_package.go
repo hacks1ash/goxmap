@@ -48,7 +48,7 @@ func RunSamePackage(opts SamePackageOptions) {
 		structMapper = dstInfo.MapperFunc
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	if len(result.Unmatched) > 0 && structMapper == "" {
 		for _, f := range result.Unmatched {
@@ -84,7 +84,7 @@ func RunSamePackage(opts SamePackageOptions) {
 	// Bidirectional same-package mode.
 	if opts.Bidi {
 		revFuncName := "Map" + opts.DstType + "To" + opts.SrcType
-		revResult := matcher.Match(dstInfo, srcInfo)
+		revResult := matcher.Match(dstInfo, srcInfo, matcher.MatchOptions{})
 
 		if len(revResult.Unmatched) > 0 {
 			for _, f := range revResult.Unmatched {

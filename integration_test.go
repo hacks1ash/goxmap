@@ -108,7 +108,7 @@ func TestSuite1_PointerConversions(t *testing.T) {
 		t.Fatalf("load PtrDest: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -178,7 +178,7 @@ func TestSuite1_CustomMapperFunction(t *testing.T) {
 		t.Fatalf("load CustomFuncDest: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -234,7 +234,7 @@ func TestSuite2_DeeplyNestedMapping(t *testing.T) {
 		t.Fatalf("load CompanyDTO: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -310,7 +310,7 @@ func TestSuite2_SliceOfPointersToValues(t *testing.T) {
 		t.Fatalf("load TeamWithValSlice: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -364,7 +364,7 @@ func TestSuite2_ExistingMapperReuse(t *testing.T) {
 		t.Fatalf("load EmployeeDTO: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	// Simulate that MapAddressToAddressDTO already exists (discovered via DiscoverMapperFuncs).
 	existing := loader.DiscoverMapperFuncs(pctx)
@@ -420,7 +420,7 @@ func TestSuite2_CircularDependency(t *testing.T) {
 		t.Fatalf("load NodeDTO: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -479,7 +479,7 @@ func TestSuite2_GoldStandardComparison(t *testing.T) {
 		t.Fatalf("load CompanyDTO: %v", err)
 	}
 
-	result := matcher.Match(src, dst)
+	result := matcher.Match(src, dst, matcher.MatchOptions{})
 
 	mcfg := generator.MultiConfig{
 		PackageName: "integration",
@@ -729,7 +729,7 @@ func TestSuite3_ComplexCollections(t *testing.T) {
 		},
 	}
 
-	result := matcher.Match(internal, external)
+	result := matcher.Match(internal, external, matcher.MatchOptions{})
 
 	if len(result.Pairs) != 1 {
 		t.Fatalf("expected 1 pair, got %d", len(result.Pairs))
@@ -894,7 +894,7 @@ type ItemDTO struct {
 	}
 
 	// Step 3: Match fields.
-	matchResult := matcher.Match(orderInfo, orderDTOInfo)
+	matchResult := matcher.Match(orderInfo, orderDTOInfo, matcher.MatchOptions{})
 
 	if got := len(matchResult.Pairs); got != 5 {
 		t.Fatalf("expected 5 matched pairs, got %d", got)
@@ -1318,7 +1318,7 @@ func TestSuite4_EndToEnd_MatcherFieldVerification(t *testing.T) {
 				t.Fatalf("load %s: %v", tt.dstType, err)
 			}
 
-			result := matcher.Match(srcInfo, dstInfo)
+			result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 			if got := len(result.Pairs); got != tt.wantPairs {
 				t.Errorf("pairs: got %d, want %d", got, tt.wantPairs)

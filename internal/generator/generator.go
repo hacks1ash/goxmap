@@ -320,7 +320,7 @@ func (g *multiGenerator) ensureMapper(srcType, dstType string) error {
 		return fmt.Errorf("loading nested destination type %s: %w", dstType, err)
 	}
 
-	result := matcher.Match(srcInfo, dstInfo)
+	result := matcher.Match(srcInfo, dstInfo, matcher.MatchOptions{})
 
 	entry := funcEntry{
 		FuncName:       funcName,

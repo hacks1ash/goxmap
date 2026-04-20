@@ -25,12 +25,26 @@ func Parse(s string) (Ref, error) {
 		return Ref{}, fmt.Errorf("empty reference")
 	}
 
-	// No slash -> bare type in current package.
+	// No slash — either bare ("User") or short module-relative ("sub.Type").
 	if !strings.ContainsRune(s, '/') {
-		if strings.ContainsRune(s, '.') {
-			return Ref{}, fmt.Errorf("bare reference %q must not contain '.'", s)
+		dot := strings.Index(s, ".")
+		if dot < 0 {
+			// Plain bare reference: no package qualifier.
+			return Ref{Kind: KindBare, TypeName: s}, nil
 		}
-		return Ref{Kind: KindBare, TypeName: s}, nil
+		// Short form: single-segment sub-package, e.g. "b.UserDTO".
+		pkg := s[:dot]
+		typeName := s[dot+1:]
+		if pkg == "" {
+			return Ref{}, fmt.Errorf("reference %q has empty package path", s)
+		}
+		if typeName == "" {
+			return Ref{}, fmt.Errorf("reference %q has empty type name", s)
+		}
+		if strings.ContainsRune(typeName, '.') {
+			return Ref{}, fmt.Errorf("reference %q has invalid type name %q", s, typeName)
+		}
+		return Ref{Kind: KindModuleRelative, PackagePath: pkg, TypeName: typeName}, nil
 	}
 
 	// Qualified: split on the final '.'.

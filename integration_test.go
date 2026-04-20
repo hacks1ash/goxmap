@@ -529,6 +529,32 @@ func TestSuite2_GoldStandardComparison(t *testing.T) {
 	}
 }
 
+// matchCross is a test-local helper that replicates the bidirectional
+// cross-package matching previously provided by matcher.MatchCross.
+// toExt: internal→external (bind tags on internal drive lookup into external).
+// fromExt: external→internal, with optional getter probing on external.
+func matchCross(internal, external *loader.StructInfo, getters map[string]loader.GetterInfo) (toExt, fromExt matcher.MatchResult) {
+	raw := matcher.Match(external, internal, matcher.MatchOptions{})
+	for _, p := range raw.Pairs {
+		toExt.Pairs = append(toExt.Pairs, matcher.FieldPair{
+			Src:           p.Dst,
+			Dst:           p.Src,
+			TypeMismatch:  p.TypeMismatch,
+			ConverterFunc: p.ConverterFunc,
+			NumericCast:   p.NumericCast,
+			CastType:      p.CastType,
+			TypeCast:      p.TypeCast,
+			CastTypeName:  p.CastTypeName,
+		})
+	}
+	toExt.Unmatched = raw.Unmatched
+	fromExt = matcher.Match(external, internal, matcher.MatchOptions{
+		SrcGetters: getters,
+		GetterMode: matcher.GetterModeAuto,
+	})
+	return
+}
+
 // ---------------------------------------------------------------------------
 // Suite 3: Cross-Package / External Dependency Mapping
 // ---------------------------------------------------------------------------
@@ -559,13 +585,13 @@ func TestSuite3_ProtobufStyleMapping(t *testing.T) {
 		},
 	}
 
-	crossResult := matcher.MatchCross(internal, extInfo, getters)
+	toExtResult, fromExtResult := matchCross(internal, extInfo, getters)
 
 	t.Run("all_fields_matched", func(t *testing.T) {
-		if got := len(crossResult.ToExternal.Pairs); got != 3 {
+		if got := len(toExtResult.Pairs); got != 3 {
 			t.Errorf("ToExternal: got %d pairs, want 3", got)
 		}
-		if got := len(crossResult.ToExternal.Unmatched); got != 0 {
+		if got := len(toExtResult.Unmatched); got != 0 {
 			t.Errorf("ToExternal: got %d unmatched, want 0", got)
 		}
 	})
@@ -578,8 +604,8 @@ func TestSuite3_ProtobufStyleMapping(t *testing.T) {
 		ExternalPkgPath:      "github.com/hacks1ash/goxmap/testdata/external",
 		ToExternalFuncName:   "MapUserToExternalUser",
 		FromExternalFuncName: "MapExternalUserToUser",
-		ToExternalPairs:      crossResult.ToExternal.Pairs,
-		FromExternalPairs:    crossResult.FromExternal.Pairs,
+		ToExternalPairs:      toExtResult.Pairs,
+		FromExternalPairs:    fromExtResult.Pairs,
 		Bidirectional:        true,
 	}
 
@@ -635,16 +661,16 @@ func TestSuite3_JSONKeyAlignment(t *testing.T) {
 		},
 	}
 
-	crossResult := matcher.MatchCross(internal, extInfo, nil)
+	toExtResult2, _ := matchCross(internal, extInfo, nil)
 
 	t.Run("bind_json_matches_all_fields", func(t *testing.T) {
-		if got := len(crossResult.ToExternal.Pairs); got != 3 {
+		if got := len(toExtResult2.Pairs); got != 3 {
 			t.Errorf("ToExternal: got %d pairs, want 3", got)
 		}
 	})
 
 	t.Run("bind_json_links_correctly", func(t *testing.T) {
-		for _, p := range crossResult.ToExternal.Pairs {
+		for _, p := range toExtResult2.Pairs {
 			switch p.Src.Name {
 			case "ID":
 				if p.Dst.Name != "RemoteID" {
@@ -669,7 +695,7 @@ func TestSuite3_JSONKeyAlignment(t *testing.T) {
 		ExternalPkgName:    "external",
 		ExternalPkgPath:    "github.com/hacks1ash/goxmap/testdata/external",
 		ToExternalFuncName: "MapLocalRecordToRemoteRecord",
-		ToExternalPairs:    crossResult.ToExternal.Pairs,
+		ToExternalPairs:    toExtResult2.Pairs,
 		Bidirectional:      false,
 	}
 
@@ -794,29 +820,29 @@ func TestSuite3_UnmatchedBindField(t *testing.T) {
 		},
 	}
 
-	result := matcher.MatchCross(internal, external, nil)
+	toExt3, fromExt3 := matchCross(internal, external, nil)
 
 	t.Run("matched_count", func(t *testing.T) {
-		if got := len(result.ToExternal.Pairs); got != 1 {
+		if got := len(toExt3.Pairs); got != 1 {
 			t.Errorf("expected 1 matched pair, got %d", got)
 		}
 	})
 
 	t.Run("unmatched_bind_field", func(t *testing.T) {
-		if got := len(result.ToExternal.Unmatched); got != 1 {
+		if got := len(toExt3.Unmatched); got != 1 {
 			t.Fatalf("expected 1 unmatched field, got %d", got)
 		}
-		if result.ToExternal.Unmatched[0].Name != "Ghost" {
-			t.Errorf("expected Ghost to be unmatched, got %s", result.ToExternal.Unmatched[0].Name)
+		if toExt3.Unmatched[0].Name != "Ghost" {
+			t.Errorf("expected Ghost to be unmatched, got %s", toExt3.Unmatched[0].Name)
 		}
 	})
 
 	t.Run("unmatched_in_both_directions", func(t *testing.T) {
-		if got := len(result.FromExternal.Unmatched); got != 1 {
+		if got := len(fromExt3.Unmatched); got != 1 {
 			t.Fatalf("expected 1 unmatched in FromExternal, got %d", got)
 		}
-		if result.FromExternal.Unmatched[0].Name != "Ghost" {
-			t.Errorf("expected Ghost in FromExternal.Unmatched, got %s", result.FromExternal.Unmatched[0].Name)
+		if fromExt3.Unmatched[0].Name != "Ghost" {
+			t.Errorf("expected Ghost in FromExternal.Unmatched, got %s", fromExt3.Unmatched[0].Name)
 		}
 	})
 }
@@ -1072,13 +1098,13 @@ type LocalUser struct {
 	})
 
 	// Match cross-package.
-	crossResult := matcher.MatchCross(localUser, remoteUser, getters)
+	toExt4, fromExt4 := matchCross(localUser, remoteUser, getters)
 
 	t.Run("cross_match_pairs", func(t *testing.T) {
-		if got := len(crossResult.ToExternal.Pairs); got != 2 {
+		if got := len(toExt4.Pairs); got != 2 {
 			t.Errorf("ToExternal: got %d pairs, want 2", got)
 		}
-		if got := len(crossResult.FromExternal.Pairs); got != 2 {
+		if got := len(fromExt4.Pairs); got != 2 {
 			t.Errorf("FromExternal: got %d pairs, want 2", got)
 		}
 	})
@@ -1092,8 +1118,8 @@ type LocalUser struct {
 		ExternalPkgPath:      modName + "/ext",
 		ToExternalFuncName:   "MapLocalUserToRemoteUser",
 		FromExternalFuncName: "MapRemoteUserToLocalUser",
-		ToExternalPairs:      crossResult.ToExternal.Pairs,
-		FromExternalPairs:    crossResult.FromExternal.Pairs,
+		ToExternalPairs:      toExt4.Pairs,
+		FromExternalPairs:    fromExt4.Pairs,
 		Bidirectional:        true,
 	}
 
@@ -1231,7 +1257,7 @@ type LocalModel struct {
 
 	getters := loader.DiscoverGetters(extPctx, "ProtoMessage")
 
-	crossResult := matcher.MatchCross(localModel, protoMsg, getters)
+	toExt5, fromExt5 := matchCross(localModel, protoMsg, getters)
 
 	ccfg := generator.CrossConfig{
 		PackageName:          "app",
@@ -1241,8 +1267,8 @@ type LocalModel struct {
 		ExternalPkgPath:      modName + "/pb",
 		ToExternalFuncName:   "MapLocalModelToProtoMessage",
 		FromExternalFuncName: "MapProtoMessageToLocalModel",
-		ToExternalPairs:      crossResult.ToExternal.Pairs,
-		FromExternalPairs:    crossResult.FromExternal.Pairs,
+		ToExternalPairs:      toExt5.Pairs,
+		FromExternalPairs:    fromExt5.Pairs,
 		Bidirectional:        true,
 	}
 

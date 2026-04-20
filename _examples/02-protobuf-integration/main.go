@@ -10,8 +10,8 @@
 // In a real project, you would run:
 //
 //	go run github.com/hacks1ash/goxmap \
-//	    -src User -dst User \
-//	    -external-pkg github.com/yourorg/yourrepo/proto \
+//	    -src User \
+//	    -dst github.com/yourorg/yourrepo/proto.User \
 //	    -bidi
 //
 // This example shows the generated output inline for clarity.

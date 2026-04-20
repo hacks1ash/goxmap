@@ -17,3 +17,61 @@ func TestParse_Empty(t *testing.T) {
 		t.Fatal("expected error for empty input")
 	}
 }
+
+func TestParse_FullPath(t *testing.T) {
+	got, err := Parse("github.com/org/repo/internal/models.User")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Kind != KindFullPath {
+		t.Fatalf("kind = %v", got.Kind)
+	}
+	if got.PackagePath != "github.com/org/repo/internal/models" {
+		t.Fatalf("pkg = %q", got.PackagePath)
+	}
+	if got.TypeName != "User" {
+		t.Fatalf("type = %q", got.TypeName)
+	}
+}
+
+func TestParse_ModuleRelative(t *testing.T) {
+	got, err := Parse("internal/models/request.RequestStruct")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Kind != KindModuleRelative {
+		t.Fatalf("kind = %v", got.Kind)
+	}
+	if got.PackagePath != "internal/models/request" {
+		t.Fatalf("pkg = %q", got.PackagePath)
+	}
+	if got.TypeName != "RequestStruct" {
+		t.Fatalf("type = %q", got.TypeName)
+	}
+}
+
+func TestParse_GopkgIn(t *testing.T) {
+	got, err := Parse("gopkg.in/yaml.v3.Node")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Kind != KindFullPath {
+		t.Fatalf("kind = %v", got.Kind)
+	}
+	if got.PackagePath != "gopkg.in/yaml.v3" {
+		t.Fatalf("pkg = %q", got.PackagePath)
+	}
+}
+
+func TestParse_Errors(t *testing.T) {
+	cases := []string{
+		"models/User",      // missing dot before type
+		".User",            // empty package
+		"internal/models.", // empty type
+	}
+	for _, in := range cases {
+		if _, err := Parse(in); err == nil {
+			t.Errorf("expected error for %q", in)
+		}
+	}
+}

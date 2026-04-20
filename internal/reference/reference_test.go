@@ -75,3 +75,24 @@ func TestParse_Errors(t *testing.T) {
 		}
 	}
 }
+
+func TestImportPath(t *testing.T) {
+	cases := []struct {
+		name    string
+		ref     Ref
+		modPath string
+		wantPkg string // empty means "current package" sentinel
+	}{
+		{"bare", Ref{Kind: KindBare, TypeName: "User"}, "example.com/m", ""},
+		{"full", Ref{Kind: KindFullPath, PackagePath: "github.com/x/y", TypeName: "T"}, "example.com/m", "github.com/x/y"},
+		{"mod-rel", Ref{Kind: KindModuleRelative, PackagePath: "internal/foo", TypeName: "T"}, "example.com/m", "example.com/m/internal/foo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.ref.ImportPath(tc.modPath)
+			if got != tc.wantPkg {
+				t.Errorf("ImportPath = %q want %q", got, tc.wantPkg)
+			}
+		})
+	}
+}

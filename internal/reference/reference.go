@@ -59,3 +59,21 @@ func Parse(s string) (Ref, error) {
 	}
 	return Ref{Kind: KindModuleRelative, PackagePath: pkg, TypeName: typeName}, nil
 }
+
+// ImportPath returns the absolute import path for the reference, or "" for
+// bare references (which resolve via the working directory's package).
+// modulePath is the module path of the working directory's module.
+func (r Ref) ImportPath(modulePath string) string {
+	switch r.Kind {
+	case KindBare:
+		return ""
+	case KindFullPath:
+		return r.PackagePath
+	case KindModuleRelative:
+		if modulePath == "" {
+			return r.PackagePath
+		}
+		return modulePath + "/" + r.PackagePath
+	}
+	return ""
+}
